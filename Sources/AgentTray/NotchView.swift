@@ -83,7 +83,8 @@ struct NotchTooltipHost: View {
                 UsageTooltip(
                     profile: profile,
                     snapshot: store.snapshot(for: profile),
-                    position: settings.notchPosition
+                    position: settings.notchPosition,
+                    caretShift: hover.caretShift
                 )
             }
         }
@@ -154,6 +155,7 @@ private struct UsageTooltip: View {
     let profile: AgentProfile
     let snapshot: AgentSnapshot?
     var position: NotchPosition = .right
+    var caretShift: CGSize = .zero
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -235,12 +237,14 @@ private struct UsageTooltip: View {
     }
 
     private var caretOffset: CGSize {
+        let edge: CGSize
         switch position {
-        case .right: CGSize(width: 6, height: 0)
-        case .left: CGSize(width: -6, height: 0)
-        case .top: CGSize(width: 0, height: 6)
-        case .bottom: CGSize(width: 0, height: -6)
+        case .right: edge = CGSize(width: 6, height: 0)
+        case .left: edge = CGSize(width: -6, height: 0)
+        case .top: edge = CGSize(width: 0, height: 6)
+        case .bottom: edge = CGSize(width: 0, height: -6)
         }
+        return CGSize(width: edge.width + caretShift.width, height: edge.height + caretShift.height)
     }
 
     private func barColor(_ percent: Int) -> Color {

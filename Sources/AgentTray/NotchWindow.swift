@@ -140,12 +140,15 @@ final class NotchController {
         updateTooltip(for: hover.hoveredID)
     }
 
-    private func currentScreen() -> NSRect {
+    private func currentDisplay() -> NSScreen? {
         if drag != nil {
-            return Self.screen(for: NSEvent.mouseLocation)
+            return NSScreen.screens.first { $0.frame.contains(NSEvent.mouseLocation) } ?? NSScreen.main
         }
-        return (NSScreen.screens.first { $0.frame.intersects(notchPanel.frame) } ?? NSScreen.main)?.frame
-            ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        return NSScreen.screens.first { $0.frame.intersects(notchPanel.frame) } ?? NSScreen.main
+    }
+
+    private func currentScreen() -> NSRect {
+        currentDisplay()?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
     }
 
     private func applyHostFrame(_ target: NSRect) {
@@ -333,6 +336,7 @@ final class NotchController {
         guard let profileID,
               let index = store.profiles.firstIndex(where: { $0.id == profileID })
         else {
+            hover.caretShift = .zero
             tooltipPanel.alphaValue = 0
             tooltipPanel.orderOut(nil)
             return
@@ -347,10 +351,15 @@ final class NotchController {
             in: notchScreenFrame(),
             position: settings.notchPosition
         )
-        tooltipPanel.setFrame(
-            NotchMetrics.tooltipFrame(size: size, meter: meter, position: settings.notchPosition),
-            display: true
+        let placement = NotchMetrics.tooltipPlacement(
+            size: size,
+            meter: meter,
+            position: settings.notchPosition,
+            in: currentDisplay()?.visibleFrame ?? currentScreen()
         )
+        hover.caretShift = placement.caretShift
+        tooltipPanel.allowedFrame = placement.frame
+        tooltipPanel.setFrame(placement.frame, display: true)
         tooltipPanel.alphaValue = 1
         tooltipPanel.orderFrontRegardless()
     }
@@ -385,6 +394,7 @@ final class NotchController {
 @MainActor
 final class NotchHoverState: ObservableObject {
     @Published var hoveredID: String?
+    @Published var caretShift: CGSize = .zero
 }
 
 final class NotchMenuActions: NSObject {
@@ -552,19 +562,66 @@ enum NotchMetrics {
         }
     }
 
-    static func tooltipFrame(size: NSSize, meter: CGPoint, position: NotchPosition) -> NSRect {
+    static func tooltipPlacement(
+        size: NSSize,
+        meter: CGPoint,
+        position: NotchPosition,
+        in bounds: NSRect
+    ) -> TooltipPlacement {
         let gap: CGFloat = 10
+        let margin: CGFloat = 10
+        let preferred: NSRect
         switch position {
         case .right:
-            return NSRect(x: meter.x - gap - size.width, y: meter.y - size.height / 2, width: size.width, height: size.height)
+            preferred = NSRect(x: meter.x - gap - size.width, y: meter.y - size.height / 2, width: size.width, height: size.height)
         case .left:
-            return NSRect(x: meter.x + gap, y: meter.y - size.height / 2, width: size.width, height: size.height)
+            preferred = NSRect(x: meter.x + gap, y: meter.y - size.height / 2, width: size.width, height: size.height)
         case .top:
-            return NSRect(x: meter.x - size.width / 2, y: meter.y - gap - size.height, width: size.width, height: size.height)
+            preferred = NSRect(x: meter.x - size.width / 2, y: meter.y - gap - size.height, width: size.width, height: size.height)
         case .bottom:
-            return NSRect(x: meter.x - size.width / 2, y: meter.y + gap, width: size.width, height: size.height)
+            preferred = NSRect(x: meter.x - size.width / 2, y: meter.y + gap, width: size.width, height: size.height)
         }
+
+        let inset = bounds.insetBy(dx: margin, dy: margin)
+        let frame = clamp(preferred, to: inset)
+        let maxShift = CGSize(
+            width: max(0, size.width / 2 - 22),
+            height: max(0, size.height / 2 - 22)
+        )
+        var caret = CGSize(
+            width: meter.x - frame.midX,
+            height: frame.midY - meter.y
+        )
+        switch position {
+        case .top, .bottom:
+            caret.height = 0
+        case .left, .right:
+            caret.width = 0
+        }
+        caret.width = min(max(caret.width, -maxShift.width), maxShift.width)
+        caret.height = min(max(caret.height, -maxShift.height), maxShift.height)
+        return TooltipPlacement(frame: frame, caretShift: caret)
     }
+
+    private static func clamp(_ rect: NSRect, to bounds: NSRect) -> NSRect {
+        var frame = rect
+        if frame.width >= bounds.width {
+            frame.origin.x = bounds.midX - frame.width / 2
+        } else {
+            frame.origin.x = min(max(frame.minX, bounds.minX), bounds.maxX - frame.width)
+        }
+        if frame.height >= bounds.height {
+            frame.origin.y = bounds.midY - frame.height / 2
+        } else {
+            frame.origin.y = min(max(frame.minY, bounds.minY), bounds.maxY - frame.height)
+        }
+        return frame
+    }
+}
+
+struct TooltipPlacement: Equatable {
+    var frame: NSRect
+    var caretShift: CGSize
 }
 
 final class NotchPanel: NSPanel {
