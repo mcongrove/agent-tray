@@ -38,19 +38,30 @@ final class NotchController {
             Task { @MainActor in await store?.refresh() }
         }
 
+        let container = NotchHitView()
+        container.wantsLayer = true
+        container.layer?.backgroundColor = NSColor.clear.cgColor
         let notchHost = NSHostingView(rootView: NotchView(store: store, settings: settings, hover: hover))
         notchHost.wantsLayer = true
         notchHost.layer?.backgroundColor = NSColor.clear.cgColor
         notchHost.unregisterDraggedTypes()
-        notchPanel.contentView = notchHost
+        notchHost.frame = NSRect(
+            origin: .zero,
+            size: NotchMetrics.panelSize(profileCount: 2, position: settings.notchPosition)
+        )
+        container.addSubview(notchHost)
+        notchPanel.contentView = container
 
         let tooltipHost = NSHostingView(rootView: NotchTooltipHost(store: store, settings: settings, hover: hover))
         tooltipHost.wantsLayer = true
         tooltipHost.layer?.backgroundColor = NSColor.clear.cgColor
         tooltipPanel.contentView = tooltipHost
 
-        reposition()
-        notchPanel.orderFrontRegardless()
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.reposition()
+            self.notchPanel.orderFrontRegardless()
+        }
 
         profileObserver = store.$profiles
             .receive(on: DispatchQueue.main)
@@ -73,7 +84,7 @@ final class NotchController {
         offsetObserver = settings.$notchOffset
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.reposition()
+                self?.layoutNotch()
             }
 
         screenObserver = NotificationCenter.default.addObserver(
@@ -115,15 +126,17 @@ final class NotchController {
 
     func reposition() {
         let screen = currentScreen()
-        let position = settings.notchPosition
-        let size = NotchMetrics.panelSize(profileCount: max(store.profiles.count, 1), position: position)
-        let offset = NotchMetrics.resolvedOffset(
-            settings.notchOffset,
-            size: size,
-            in: screen,
-            position: position
-        )
-        applyPinnedFrame(size: size, offset: offset, in: screen, position: position)
+        applyHostFrame(NotchMetrics.hostFrame(in: screen, position: settings.notchPosition))
+        layoutNotch()
+    }
+
+    private func layoutNotch() {
+        if let hitView = notchPanel.contentView as? NotchHitView,
+           let host = hitView.subviews.first {
+            let frame = notchRectInHost()
+            host.frame = frame
+            hitView.hitRect = frame
+        }
         updateTooltip(for: hover.hoveredID)
     }
 
@@ -135,9 +148,10 @@ final class NotchController {
             ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
     }
 
-    private func applyPinnedFrame(size: NSSize, offset: CGFloat, in screen: NSRect, position: NotchPosition) {
-        let origin = NotchMetrics.panelOrigin(size: size, offset: offset, in: screen, position: position)
-        let target = NSRect(origin: origin, size: size)
+    private func applyHostFrame(_ target: NSRect) {
+        notchPanel.allowedFrame = target
+        notchPanel.minSize = target.size
+        notchPanel.maxSize = target.size
         guard !NotchMetrics.framesMatch(notchPanel.frame, target) else { return }
         pinning = true
         notchPanel.setFrame(target, display: true)
@@ -146,13 +160,43 @@ final class NotchController {
 
     private func snapBackIfOffEdge() {
         guard !pinning, drag == nil else { return }
-        let screen = currentScreen()
+        let target = NotchMetrics.hostFrame(in: currentScreen(), position: settings.notchPosition)
+        guard !NotchMetrics.framesMatch(notchPanel.frame, target) else { return }
+        applyHostFrame(target)
+        layoutNotch()
+    }
+
+    private func notchScreenFrame() -> NSRect {
+        let host = notchPanel.frame
         let position = settings.notchPosition
-        guard !NotchMetrics.isFlush(notchPanel.frame, to: position, in: screen) else { return }
         let size = NotchMetrics.panelSize(profileCount: max(store.profiles.count, 1), position: position)
-        settings.notchOffset = NotchMetrics.offsetFromFrame(notchPanel.frame, in: screen, position: position)
-        applyPinnedFrame(size: size, offset: settings.notchOffset ?? 0, in: screen, position: position)
-        updateTooltip(for: hover.hoveredID)
+        let offset = NotchMetrics.resolvedOffset(
+            settings.notchOffset,
+            size: size,
+            in: currentScreen(),
+            position: position
+        )
+        switch position {
+        case .right, .left:
+            return NSRect(x: host.minX, y: host.maxY - offset - size.height, width: size.width, height: size.height)
+        case .top, .bottom:
+            return NSRect(x: host.minX + offset, y: host.minY, width: size.width, height: size.height)
+        }
+    }
+
+    private func notchRectInHost() -> NSRect {
+        let size = NotchMetrics.panelSize(profileCount: max(store.profiles.count, 1), position: settings.notchPosition)
+        let host = notchPanel.frame
+        let offset = NotchMetrics.resolvedOffset(
+            settings.notchOffset,
+            size: size,
+            in: currentScreen(),
+            position: settings.notchPosition
+        )
+        if settings.notchPosition.isHorizontal {
+            return NSRect(x: offset, y: 0, width: size.width, height: host.height)
+        }
+        return NSRect(x: 0, y: offset, width: host.width, height: size.height)
     }
 
     private func handleNotchMouse(_ event: NSEvent) -> Bool {
@@ -171,7 +215,7 @@ final class NotchController {
                 dragging = true
                 drag = DragSession(clickAlong: NotchMetrics.clickAlong(
                     point: start,
-                    panel: notchPanel.frame,
+                    panel: notchScreenFrame(),
                     position: settings.notchPosition
                 ))
             }
@@ -229,7 +273,7 @@ final class NotchController {
                     dragging = true
                     drag = DragSession(clickAlong: NotchMetrics.clickAlong(
                         point: start,
-                        panel: notchPanel.frame,
+                        panel: notchScreenFrame(),
                         position: settings.notchPosition
                     ))
                     updateDrag(at: now)
@@ -300,7 +344,7 @@ final class NotchController {
         let meter = NotchMetrics.meterCenter(
             index: index,
             count: store.profiles.count,
-            in: notchPanel.frame,
+            in: notchScreenFrame(),
             position: settings.notchPosition
         )
         tooltipPanel.setFrame(
@@ -323,8 +367,16 @@ final class NotchController {
         panel.backgroundColor = .clear
         panel.hasShadow = false
         panel.hidesOnDeactivate = false
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        panel.collectionBehavior = [
+            .canJoinAllSpaces,
+            .fullScreenAuxiliary,
+            .fullScreenDisallowsTiling,
+            .stationary,
+        ]
         panel.isMovable = false
+        panel.isMovableByWindowBackground = false
+        panel.animationBehavior = .none
+        panel.isFloatingPanel = true
         panel.acceptsMouseMovedEvents = true
         return panel
     }
@@ -389,9 +441,26 @@ enum NotchMetrics {
     }
 
     static func resolvedOffset(_ stored: CGFloat?, size: NSSize, in screen: NSRect, position: NotchPosition) -> CGFloat {
-        let maxOff = maxOffset(size: size, in: screen, position: position)
-        if let stored { return min(max(stored, 0), maxOff) }
-        return defaultOffset(size: size, in: screen, position: position)
+        resolvedOffset(stored, maxOffset: maxOffset(size: size, in: screen, position: position), position: position)
+    }
+
+    static func resolvedOffset(_ stored: CGFloat?, maxOffset: CGFloat, position: NotchPosition) -> CGFloat {
+        if let stored { return min(max(stored, 0), maxOffset) }
+        return position == .bottom ? maxOffset : maxOffset / 2
+    }
+
+    static func hostFrame(in screen: NSRect, position: NotchPosition) -> NSRect {
+        let thick = notchWidth
+        switch position {
+        case .right:
+            return NSRect(x: screen.maxX - thick, y: screen.minY, width: thick, height: screen.height)
+        case .left:
+            return NSRect(x: screen.minX, y: screen.minY, width: thick, height: screen.height)
+        case .top:
+            return NSRect(x: screen.minX, y: screen.maxY - thick, width: screen.width, height: thick)
+        case .bottom:
+            return NSRect(x: screen.minX, y: screen.minY, width: screen.width, height: thick)
+        }
     }
 
     static func offsetFromFrame(_ frame: NSRect, in screen: NSRect, position: NotchPosition) -> CGFloat {
@@ -500,6 +569,23 @@ enum NotchMetrics {
 
 final class NotchPanel: NSPanel {
     var allowsKey = false
+    var allowedFrame: NSRect?
     override var canBecomeKey: Bool { allowsKey }
     override var canBecomeMain: Bool { false }
+
+    override func performDrag(with event: NSEvent) {}
+
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        allowedFrame ?? super.constrainFrameRect(frameRect, to: screen)
+    }
+}
+
+final class NotchHitView: NSView {
+    var hitRect: NSRect = .zero
+
+    override var isFlipped: Bool { true }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        hitRect.contains(point) ? super.hitTest(point) : nil
+    }
 }

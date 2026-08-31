@@ -144,8 +144,7 @@ struct AgentTrayTests {
     }
 
     static func liveProviderProbe() async {
-        let settings = AppSettings(defaults: UserDefaults(suiteName: "AgentTrayLiveProbe")!)
-        let profiles = ProfileCatalog().discover(settings: settings)
+        let profiles = ProfileCatalog().discover()
         print("Live profiles: \(profiles.map(\.displayName).joined(separator: ", "))")
         for profile in profiles {
             let snapshot: AgentSnapshot

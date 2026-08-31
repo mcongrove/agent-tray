@@ -13,10 +13,9 @@ Agent Tray is a native macOS edge-notch utility for monitoring local Grok, Curso
 ```sh
 ./scripts/test.sh
 ./scripts/package.sh
-open ".build/Agent Tray.app"
 ```
 
-The packaging script creates an ad-hoc signed local app bundle. Move it to `/Applications` before enabling Launch at Login.
+`package.sh` builds an ad-hoc signed app and installs it to `/Applications/Agent Tray.app`. Launch from there once; login launch registers automatically.
 
 ## Data access
 

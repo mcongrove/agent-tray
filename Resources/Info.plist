@@ -9,7 +9,7 @@
     <key>CFBundleExecutable</key>
     <string>AgentTray</string>
     <key>CFBundleIdentifier</key>
-    <string>com.agentuity.AgentTray</string>
+    <string>com.mcongrove.AgentTray</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
