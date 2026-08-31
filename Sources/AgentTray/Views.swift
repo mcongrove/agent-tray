@@ -96,7 +96,7 @@ struct AgentPanelView: View {
             ContentUnavailableView(
                 "No agents found",
                 systemImage: "cpu",
-                description: Text("Install Grok or Codex, or add a Codex provider in Settings.")
+                description: Text("Install Grok, Codex, or Cursor, or add a Codex provider in Settings.")
             )
             .frame(minHeight: 260)
         }
@@ -231,7 +231,10 @@ private struct SnapshotView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(profile.displayName)
                     .font(.headline)
-                Text([snapshot.planName, snapshot.sourceNote].compactMap { $0 }.joined(separator: " · "))
+                Text([snapshot.planName, snapshot.creditBalance, snapshot.sourceNote]
+                    .compactMap { $0 }
+                    .filter { !$0.isEmpty }
+                    .joined(separator: " · "))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -285,7 +288,12 @@ private struct QuotaCell: View {
                 .tint(progressColor)
                 .accessibilityLabel("\(window.label) usage")
                 .accessibilityValue("\(window.usedPercent) percent used")
-            if let reset = window.resetsAt {
+            if let detail = window.detail {
+                Text(detail)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            } else if let reset = window.resetsAt {
                 Text("Resets \(reset.relativeDescription)")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -306,11 +314,10 @@ private struct ActivityGrid: View {
     let activity: ActivitySummary
 
     private var metrics: [(String, String)] {
-        var values: [(String, String)] = [
-            ("Today", activity.tokensToday.map { "\($0.compactCount) tokens" } ?? "Not available"),
-            ("Last 7 days", activity.tokensSevenDays.map { "\($0.compactCount) tokens" } ?? "Not available"),
-            ("Recent sessions", activity.recentSessions.formatted())
-        ]
+        var values: [(String, String)] = []
+        if let today = activity.tokensToday { values.append(("Today", "\(today.compactCount) tokens")) }
+        if let week = activity.tokensSevenDays { values.append(("Last 7 days", "\(week.compactCount) tokens")) }
+        values.append(("Recent sessions", activity.recentSessions.formatted()))
         if let date = activity.lastActivity { values.append(("Last active", date.relativeDescription)) }
         if let model = activity.model { values.append(("Recent model", model)) }
         if let lifetime = activity.lifetimeTokens { values.append(("Lifetime", "\(lifetime.compactCount) tokens")) }

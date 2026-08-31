@@ -25,6 +25,7 @@ final class StatsStore: ObservableObject {
         self.catalog = catalog
         self.cache = cache
         reloadProfiles()
+        Task { await start() }
     }
 
     deinit {
@@ -60,27 +61,36 @@ final class StatsStore: ObservableObject {
         isRefreshing = true
         let requestedProfiles = profiles
 
-        let fresh = await withTaskGroup(of: AgentSnapshot.self, returning: [String: AgentSnapshot].self) { group in
+        await withTaskGroup(of: AgentSnapshot.self) { group in
             for profile in requestedProfiles {
                 group.addTask {
-                    switch profile.kind {
-                    case .grok:
-                        return await GrokStatsProvider().snapshot(for: profile)
-                    case .codex:
-                        return await CodexStatsProvider().snapshot(for: profile)
-                    }
+                    await Self.loadSnapshot(for: profile)
                 }
             }
-
-            var result: [String: AgentSnapshot] = [:]
-            for await snapshot in group { result[snapshot.profileID] = snapshot }
-            return result
+            for await snapshot in group {
+                snapshots[snapshot.profileID] = snapshot
+            }
         }
 
-        for (id, snapshot) in fresh { snapshots[id] = snapshot }
         lastRefresh = Date()
         isRefreshing = false
         await cache.save(snapshots)
+    }
+
+    private static func loadSnapshot(for profile: AgentProfile) async -> AgentSnapshot {
+        await withTimeout(seconds: 12, fallback: .unavailable(
+            profileID: profile.id,
+            message: "Timed out reading \(profile.displayName) stats."
+        )) {
+            switch profile.kind {
+            case .grok:
+                return await GrokStatsProvider().snapshot(for: profile)
+            case .cursor:
+                return await CursorStatsProvider().snapshot(for: profile)
+            case .codex:
+                return await CodexStatsProvider().snapshot(for: profile)
+            }
+        }
     }
 
     func snapshot(for profile: AgentProfile) -> AgentSnapshot? {

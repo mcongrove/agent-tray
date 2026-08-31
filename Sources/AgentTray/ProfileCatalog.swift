@@ -27,6 +27,18 @@ final class AppSettings: ObservableObject {
     @Published var manualProfiles: [ManualCodexProfile] {
         didSet { persist(manualProfiles, key: Keys.manualProfiles) }
     }
+    @Published var notchPosition: NotchPosition {
+        didSet { defaults.set(notchPosition.rawValue, forKey: Keys.notchPosition) }
+    }
+    @Published var notchOffset: CGFloat? {
+        didSet {
+            if let notchOffset {
+                defaults.set(notchOffset, forKey: Keys.notchOffset)
+            } else {
+                defaults.removeObject(forKey: Keys.notchOffset)
+            }
+        }
+    }
 
     private let defaults: UserDefaults
 
@@ -34,6 +46,8 @@ final class AppSettings: ObservableObject {
         static let refreshMinutes = "refreshMinutes"
         static let preferences = "profilePreferences"
         static let manualProfiles = "manualCodexProfiles"
+        static let notchPosition = "notchPosition"
+        static let notchOffset = "notchOffset"
     }
 
     init(defaults: UserDefaults = .standard) {
@@ -42,7 +56,14 @@ final class AppSettings: ObservableObject {
         defaults.set(1, forKey: Keys.refreshMinutes)
         preferences = Self.decode([ProfilePreference].self, key: Keys.preferences, defaults: defaults) ?? []
         manualProfiles = Self.decode([ManualCodexProfile].self, key: Keys.manualProfiles, defaults: defaults) ?? []
+        notchPosition = NotchPosition(rawValue: defaults.string(forKey: Keys.notchPosition) ?? "") ?? .right
+        notchOffset = defaults.object(forKey: Keys.notchOffset) == nil ? nil : CGFloat(defaults.double(forKey: Keys.notchOffset))
         refreshLaunchAtLoginStatus()
+    }
+
+    func placeNotch(on position: NotchPosition) {
+        notchPosition = position
+        notchOffset = nil
     }
 
     func preference(for profile: AgentProfile) -> ProfilePreference {
@@ -155,6 +176,15 @@ struct ProfileCatalog {
                 displayName: "Grok",
                 codexSelection: nil,
                 executableURL: grokExecutable
+            ))
+        }
+
+        if cursorIsPresent() {
+            profiles.append(AgentProfile(
+                id: "cursor-default",
+                kind: .cursor,
+                displayName: "Cursor",
+                executableURL: URL(fileURLWithPath: "/Applications/Cursor.app")
             ))
         }
 
@@ -283,8 +313,18 @@ struct ProfileCatalog {
         return candidates.first { fileManager.isExecutableFile(atPath: $0.path) }
     }
 
+    private func cursorIsPresent() -> Bool {
+        let support = homeDirectory.appendingPathComponent("Library/Application Support/Cursor")
+        let cursorHome = homeDirectory.appendingPathComponent(".cursor")
+        let app = URL(fileURLWithPath: "/Applications/Cursor.app")
+        return fileManager.fileExists(atPath: support.path)
+            || fileManager.fileExists(atPath: cursorHome.path)
+            || fileManager.fileExists(atPath: app.path)
+    }
+
     private func defaultOrder(for profile: AgentProfile) -> Int {
         switch profile.id {
+        case "cursor-default": 5_000
         case "grok-default": 10_000
         case "codex-default": 20_000
         default: 30_000

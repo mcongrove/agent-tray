@@ -42,7 +42,7 @@ struct SettingsView: View {
             }
 
             Section {
-                Text("Agent Tray reads usage metadata from local agent files and the Codex app server. It does not store prompts, responses, or credentials.")
+                Text("Agent Tray reads usage metadata from local agent files, the Codex app server, and the Cursor dashboard. It does not store prompts, responses, or credentials.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

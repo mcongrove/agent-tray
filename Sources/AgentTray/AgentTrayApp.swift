@@ -3,32 +3,28 @@ import SwiftUI
 
 @main
 struct AgentTrayApp: App {
-    @StateObject private var settings: AppSettings
-    @StateObject private var store: StatsStore
-
-    init() {
-        let settings = AppSettings()
-        _settings = StateObject(wrappedValue: settings)
-        _store = StateObject(wrappedValue: StatsStore(settings: settings))
-        NSApplication.shared.setActivationPolicy(.accessory)
-    }
+    @StateObject private var runtime = AppRuntime()
 
     var body: some Scene {
-        MenuBarExtra {
-            AgentPanelView(store: store)
-        } label: {
-            Image(nsImage: TrayIcon.image)
-                .renderingMode(.template)
-                .resizable()
-                .scaledToFit()
-                .frame(width: 20, height: 20)
-                .accessibilityLabel("Agent Tray")
-        }
-        .menuBarExtraStyle(.window)
-
         Settings {
-            SettingsView(store: store, settings: settings)
+            SettingsView(store: runtime.store, settings: runtime.settings)
         }
+    }
+}
+
+@MainActor
+final class AppRuntime: ObservableObject {
+    let settings: AppSettings
+    let store: StatsStore
+    private var notch: NotchController?
+
+    init() {
+        NSApplication.shared.setActivationPolicy(.accessory)
+        let settings = AppSettings()
+        let store = StatsStore(settings: settings)
+        self.settings = settings
+        self.store = store
+        notch = NotchController(store: store, settings: settings)
     }
 }
 

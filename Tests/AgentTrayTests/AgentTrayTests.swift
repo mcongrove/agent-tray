@@ -7,9 +7,12 @@ struct AgentTrayTests {
     static func main() async throws {
         discoversModelProvidersWithoutDuplicates()
         decodesCodexUsageAndRateLimits()
+        decodesCursorUsageWindows()
+        cursorLocalActivityCountsSessions()
         try grokLogAggregatesNetTokensAndLatestQuota()
         try codexLocalTokenTotalsUseCumulativeDeltas()
         compactCounts()
+        try await timeoutReturnsFallback()
         if CommandLine.arguments.contains("--live") {
             await liveProviderProbe()
         }
@@ -53,6 +56,42 @@ struct AgentTrayTests {
         expect(result.rateLimits?.rateLimits.primary?.usedPercent == 42, "Codex quota decoding")
         expect(result.usage?.summary.lifetimeTokens == 1234, "Codex usage decoding")
         expect(CodexStatsProvider.quotaWindows(from: result.rateLimits).first?.label == "Weekly", "Codex window naming")
+
+        let dual = """
+        {"id":2,"result":{"rateLimits":{"limitId":"codex","primary":{"usedPercent":42,"windowDurationMins":10080},"secondary":{"usedPercent":18,"windowDurationMins":300},"planType":"pro"},"rateLimitsByLimitId":null}}
+        """
+        let dualLimits = CodexStatsProvider.decodeResponses(Data(dual.utf8)).rateLimits
+        let dualWindows = CodexStatsProvider.quotaWindows(from: dualLimits)
+        expect(dualWindows.map(\.label) == ["Weekly", "5-hour"], "Codex week and 5-hour windows")
+        expect(dualWindows.map(\.usedPercent) == [42, 18], "Codex window percents")
+    }
+
+    static func decodesCursorUsageWindows() {
+        let json = """
+        {"billingCycleStart":"1768399334000","billingCycleEnd":"1771077734000","planUsage":{"includedSpend":38000,"limit":40000,"autoPercentUsed":21.6,"apiPercentUsed":39.1,"totalPercentUsed":24.2},"spendLimitUsage":{"individualLimit":2000,"individualRemaining":1500}}
+        """
+        let usage = CursorStatsProvider.decodePeriodUsage(Data(json.utf8))
+        let windows = CursorStatsProvider.quotaWindows(from: usage)
+        expect(windows.map(\.label) == ["Cursor models", "Other models", "On-demand"], "Cursor window labels")
+        expect(windows[0].usedPercent == 22, "Cursor models percent")
+        expect(windows[1].usedPercent == 39, "Cursor other-models percent")
+        expect(windows[2].detail == "$5 / $20", "Cursor on-demand detail")
+    }
+
+    static func cursorLocalActivityCountsSessions() {
+        guard let now = ISO8601DateFormatter().date(from: "2026-08-28T14:00:00Z") else {
+            failures += 1
+            fputs("FAIL: Cursor activity fixture date\n", stderr)
+            return
+        }
+        let rows = [
+            CursorLocalActivityRow(createdAt: 1_787_918_400_000, model: "grok-4.6", conversationID: "one"),
+            CursorLocalActivityRow(createdAt: 1_787_922_000_000, model: "composer-2.5", conversationID: "two"),
+            CursorLocalActivityRow(createdAt: 1_787_227_200_000, model: "old", conversationID: "stale")
+        ]
+        let activity = CursorStatsProvider.parseLocalActivity(rows, now: now)
+        expect(activity.recentSessions == 2, "Cursor recent sessions")
+        expect(activity.model == "composer-2.5", "Cursor recent model")
     }
 
     static func grokLogAggregatesNetTokensAndLatestQuota() throws {
@@ -72,6 +111,14 @@ struct AgentTrayTests {
         expect(result.recentSessions == 2, "Grok session count")
         expect(result.creditUsagePercent == 72.5, "Grok quota")
         expect(result.model == "grok-4.6", "Grok model")
+    }
+
+    static func timeoutReturnsFallback() async throws {
+        let value = await withTimeout(seconds: 0.05, fallback: "fallback") {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            return "slow"
+        }
+        expect(value == "fallback", "timeout fallback")
     }
 
     static func compactCounts() {
@@ -104,6 +151,7 @@ struct AgentTrayTests {
             let snapshot: AgentSnapshot
             switch profile.kind {
             case .grok: snapshot = await GrokStatsProvider().snapshot(for: profile)
+            case .cursor: snapshot = await CursorStatsProvider().snapshot(for: profile)
             case .codex: snapshot = await CodexStatsProvider().snapshot(for: profile)
             }
             print("\(profile.displayName): quota=\(snapshot.quotaWindows.count), today=\(snapshot.activity.tokensToday.map(String.init) ?? "n/a"), week=\(snapshot.activity.tokensSevenDays.map(String.init) ?? "n/a"), sessions=\(snapshot.activity.recentSessions), health=\(snapshot.health)")

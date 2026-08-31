@@ -1,13 +1,22 @@
 import Foundation
 
+enum NotchPosition: String, CaseIterable {
+    case top, right, bottom, left
+
+    var label: String { rawValue.capitalized }
+    var isHorizontal: Bool { self == .top || self == .bottom }
+}
+
 enum AgentKind: String, Codable, Sendable {
     case grok
+    case cursor
     case codex
 
     var symbolName: String {
         switch self {
-        case .grok: "bolt.horizontal.circle"
-        case .codex: "chevron.left.forwardslash.chevron.right"
+        case .grok: "sparkle"
+        case .cursor: "cube"
+        case .codex: "circle.hexagongrid"
         }
     }
 }
@@ -33,6 +42,7 @@ struct QuotaWindow: Identifiable, Codable, Equatable, Sendable {
     let usedPercent: Int
     let resetsAt: Date?
     let durationMinutes: Int?
+    var detail: String? = nil
 }
 
 struct ActivitySummary: Codable, Equatable, Sendable {
@@ -76,6 +86,28 @@ struct AgentSnapshot: Codable, Equatable, Sendable {
     var health: ProviderHealth
     var sourceNote: String
 
+    var headlinePercent: Int {
+        quotaWindows.first(where: { $0.id != "cursor-ondemand" })?.usedPercent
+            ?? quotaWindows.first?.usedPercent
+            ?? 0
+    }
+
+    var cursorModelsPercent: Int? {
+        quotaWindows.first(where: { $0.id == "cursor-auto" })?.usedPercent
+    }
+
+    var cursorOtherPercent: Int? {
+        quotaWindows.first(where: { $0.id == "cursor-api" })?.usedPercent
+    }
+
+    var codexWeeklyPercent: Int? {
+        quotaWindows.first(where: { $0.durationMinutes == 10_080 })?.usedPercent
+    }
+
+    var codexFiveHourPercent: Int? {
+        quotaWindows.first(where: { $0.durationMinutes == 300 })?.usedPercent
+    }
+
     static func unavailable(profileID: String, message: String) -> AgentSnapshot {
         AgentSnapshot(
             profileID: profileID,
@@ -114,11 +146,46 @@ extension Int64 {
     }
 }
 
+func withTimeout<T: Sendable>(
+    seconds: TimeInterval,
+    fallback: T,
+    operation: @escaping @Sendable () async -> T
+) async -> T {
+    await withCheckedContinuation { continuation in
+        let gate = TimeoutGate<T>()
+        let work = Task {
+            await gate.finish(await operation(), continuation: continuation)
+        }
+        Task {
+            try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            await gate.finish(fallback, continuation: continuation)
+            work.cancel()
+        }
+    }
+}
+
+private actor TimeoutGate<T: Sendable> {
+    private var resumed = false
+
+    func finish(_ value: T, continuation: CheckedContinuation<T, Never>) {
+        guard !resumed else { return }
+        resumed = true
+        continuation.resume(returning: value)
+    }
+}
+
 extension Date {
     var relativeDescription: String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         return formatter.localizedString(for: self, relativeTo: Date())
+    }
+
+    var weekdayTimeDescription: String {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.dateFormat = "EEE h:mm a"
+        return formatter.string(from: self)
     }
 
     func compactPastDescription(relativeTo now: Date = Date()) -> String {
