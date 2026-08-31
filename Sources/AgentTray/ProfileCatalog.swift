@@ -88,7 +88,7 @@ struct ProfileCatalog {
 
         let codexHome = environment["CODEX_HOME"].map(URL.init(fileURLWithPath:))
             ?? homeDirectory.appendingPathComponent(".codex")
-        let codexExecutable = executable(named: "codex", preferred: homeDirectory.appendingPathComponent(".local/bin/codex"))
+        let codexExecutable = executable(named: "codex", preferred: Self.preferredCodexExecutable(homeDirectory: homeDirectory))
         if fileManager.fileExists(atPath: codexHome.path) || codexExecutable != nil {
             profiles.append(AgentProfile(
                 id: "codex-default",
@@ -180,16 +180,38 @@ struct ProfileCatalog {
         }
     }
 
+    static func preferredCodexExecutable(homeDirectory: URL) -> URL {
+        homeDirectory.appendingPathComponent(".local/bin/codex")
+    }
+
+    static func wellKnownExecutableLocations(named name: String, homeDirectory: URL) -> [URL] {
+        var locations = [
+            homeDirectory.appendingPathComponent(".local/bin/\(name)"),
+            URL(fileURLWithPath: "/opt/homebrew/bin/\(name)"),
+            URL(fileURLWithPath: "/usr/local/bin/\(name)"),
+        ]
+        if name == "codex" {
+            locations.append(contentsOf: [
+                URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex"),
+                URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex"),
+                homeDirectory.appendingPathComponent(".codex/bin/codex"),
+            ])
+        }
+        return locations
+    }
+
     private func executable(named name: String, preferred: URL) -> URL? {
         var candidates = [preferred]
+        candidates.append(contentsOf: Self.wellKnownExecutableLocations(named: name, homeDirectory: homeDirectory))
         if let path = environment["PATH"] {
             candidates.append(contentsOf: path.split(separator: ":").map {
                 URL(fileURLWithPath: String($0)).appendingPathComponent(name)
             })
         }
-        candidates.append(URL(fileURLWithPath: "/opt/homebrew/bin/\(name)"))
-        candidates.append(URL(fileURLWithPath: "/usr/local/bin/\(name)"))
-        return candidates.first { fileManager.isExecutableFile(atPath: $0.path) }
+        var seen = Set<String>()
+        return candidates.first { candidate in
+            seen.insert(candidate.path).inserted && fileManager.isExecutableFile(atPath: candidate.path)
+        }
     }
 
     private func cursorIsPresent() -> Bool {

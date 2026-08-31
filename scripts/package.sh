@@ -5,6 +5,7 @@ project_root="${0:A:h:h}"
 cd "$project_root"
 
 sdk="$(xcrun --show-sdk-path)"
+architecture="$(uname -m)"
 mkdir -p .build/release .build/generated
 
 accessor=".build/generated/resource_bundle_accessor.swift"
@@ -32,7 +33,7 @@ EOF
 fi
 
 xcrun swiftc -parse-as-library -O \
-  -target arm64-apple-macosx14.0 \
+  -target "$architecture-apple-macosx14.0" \
   -sdk "$sdk" \
   -o .build/release/AgentTray \
   Sources/AgentTray/*.swift \

@@ -29,7 +29,7 @@ struct CodexStatsProvider: AgentStatsProvider {
                 activity: localActivity,
                 planName: nil,
                 creditBalance: nil,
-                health: .partial("Codex is not available on the current PATH."),
+                health: .partial("Codex CLI was not found."),
                 sourceNote: "Local Codex sessions"
             )
         }

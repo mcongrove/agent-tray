@@ -43,6 +43,14 @@ struct AgentTrayTests {
         """
 
         expect(ProfileCatalog.modelProviderIDs(in: config) == ["azure", "custom-edge"], "provider discovery")
+        let locations = ProfileCatalog.wellKnownExecutableLocations(
+            named: "codex",
+            homeDirectory: URL(fileURLWithPath: "/Users/test")
+        )
+        expect(
+            locations.contains(URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex")),
+            "ChatGPT-bundled Codex discovery"
+        )
     }
 
     static func decodesCodexUsageAndRateLimits() {
