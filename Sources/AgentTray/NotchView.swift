@@ -60,15 +60,15 @@ struct NotchView: View {
         if profile.kind == .cursor,
            let models = snapshot?.cursorModelsPercent,
            let other = snapshot?.cursorOtherPercent {
-            return "\(profile.displayName) Cursor models \(models) percent, other models \(other) percent"
+            return "\(profile.displayName) Cursor models \(remainingPercent(models)) percent remaining, other models \(remainingPercent(other)) percent remaining"
         }
         if profile.kind == .codex,
            let weekly = snapshot?.codexWeeklyPercent,
            let fiveHour = snapshot?.codexFiveHourPercent {
-            return "\(profile.displayName) weekly \(weekly) percent, 5-hour \(fiveHour) percent"
+            return "\(profile.displayName) weekly \(remainingPercent(weekly)) percent remaining, 5-hour \(remainingPercent(fiveHour)) percent remaining"
         }
         let percent = snapshot?.headlinePercent ?? 0
-        return "\(profile.displayName) \(percent) percent used"
+        return "\(profile.displayName) \(remainingPercent(percent)) percent remaining"
     }
 }
 
@@ -104,14 +104,14 @@ private struct NotchMeter: View {
                let other = snapshot?.cursorOtherPercent {
                 UsageRing(progress: Double(models) / 100, lineWidth: 2.5)
                     .frame(width: NotchMetrics.ringSize, height: NotchMetrics.ringSize)
-                UsageRing(progress: Double(other) / 100, lineWidth: 2, color: Color.notchInner)
+                UsageRing(progress: Double(other) / 100, lineWidth: 2)
                     .frame(width: NotchMetrics.innerRingSize, height: NotchMetrics.innerRingSize)
             } else if profile.kind == .codex,
                       let weekly = snapshot?.codexWeeklyPercent,
                       let fiveHour = snapshot?.codexFiveHourPercent {
                 UsageRing(progress: Double(weekly) / 100, lineWidth: 2.5)
                     .frame(width: NotchMetrics.ringSize, height: NotchMetrics.ringSize)
-                UsageRing(progress: Double(fiveHour) / 100, lineWidth: 2, color: Color.notchInner)
+                UsageRing(progress: Double(fiveHour) / 100, lineWidth: 2)
                     .frame(width: NotchMetrics.innerRingSize, height: NotchMetrics.innerRingSize)
             } else {
                 UsageRing(progress: Double(snapshot?.headlinePercent ?? 0) / 100, lineWidth: 2.5)
@@ -130,7 +130,6 @@ private struct NotchMeter: View {
 private struct UsageRing: View {
     let progress: Double
     var lineWidth: CGFloat = 3
-    var color: Color? = nil
 
     var body: some View {
         ZStack {
@@ -138,16 +137,9 @@ private struct UsageRing: View {
                 .stroke(Color.white.opacity(0.14), lineWidth: lineWidth)
             Circle()
                 .trim(from: 0, to: min(max(progress, 0.02), 1))
-                .stroke(resolvedColor, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                .stroke(usageColor(progress), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
                 .rotationEffect(.degrees(-90))
         }
-    }
-
-    private var resolvedColor: Color {
-        if let color { return color }
-        if progress > 0.9 { return Color.notchDanger }
-        if progress >= 0.75 { return Color.notchWarn }
-        return Color.notchAccent
     }
 }
 
@@ -211,12 +203,12 @@ private struct UsageTooltip: View {
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.white.opacity(0.12))
                     Capsule()
-                        .fill(barColor(window.usedPercent))
+                        .fill(usageColor(window.usedPercent))
                         .frame(width: max(geo.size.width * CGFloat(window.usedPercent) / 100, 4))
                 }
             }
             .frame(height: 5)
-            Text(window.detail ?? "\(window.usedPercent)% Used")
+            Text(window.detail ?? "\(remainingPercent(window.usedPercent))% remaining")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(Color.white.opacity(0.72))
                 .monospacedDigit()
@@ -247,11 +239,6 @@ private struct UsageTooltip: View {
         return CGSize(width: edge.width + caretShift.width, height: edge.height + caretShift.height)
     }
 
-    private func barColor(_ percent: Int) -> Color {
-        if percent > 90 { return Color.notchDanger }
-        if percent >= 75 { return Color.notchWarn }
-        return Color.notchAccent
-    }
 }
 
 private struct TooltipCaret: Shape {
@@ -338,10 +325,23 @@ private struct EdgeNotchShape: Shape {
     }
 }
 
+private func remainingPercent(_ usedPercent: Int) -> Int {
+    min(max(100 - usedPercent, 0), 100)
+}
+
+private func usageColor(_ usedPercent: Int) -> Color {
+    if usedPercent >= 75 { return Color.notchDanger }
+    if usedPercent >= 50 { return Color.notchWarn }
+    return Color.notchAccent
+}
+
+private func usageColor(_ progress: Double) -> Color {
+    usageColor(Int((progress * 100).rounded()))
+}
+
 private extension Color {
     static let notchFill = Color(red: 0.04, green: 0.04, blue: 0.045)
     static let notchAccent = Color(red: 0.45, green: 0.95, blue: 0.38)
-    static let notchInner = Color(red: 0.72, green: 0.94, blue: 0.36)
-    static let notchWarn = Color(red: 0.86, green: 0.92, blue: 0.32)
+    static let notchWarn = Color(red: 0.98, green: 0.78, blue: 0.18)
     static let notchDanger = Color(red: 0.95, green: 0.32, blue: 0.28)
 }

@@ -12,8 +12,12 @@ final class NotchController {
     private let menuActions = NotchMenuActions()
     private var screenObserver: NSObjectProtocol?
     private var moveObserver: NSObjectProtocol?
+    private var spaceObserver: NSObjectProtocol?
+    private var appObserver: NSObjectProtocol?
     private var mouseMonitor: Any?
     private var dragGlobalMonitor: Any?
+    private var fullscreenTimer: Timer?
+    private var chromeHidden = false
     private var profileObserver: AnyCancellable?
     private var hoverObserver: AnyCancellable?
     private var positionObserver: AnyCancellable?
@@ -60,7 +64,7 @@ final class NotchController {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.reposition()
-            self.notchPanel.orderFrontRegardless()
+            self.applyFullscreenVisibility()
         }
 
         profileObserver = store.$profiles
@@ -94,8 +98,37 @@ final class NotchController {
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.reposition()
+                self?.applyFullscreenVisibility()
             }
         }
+
+        let workspace = NSWorkspace.shared.notificationCenter
+        spaceObserver = workspace.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.applyFullscreenVisibility()
+            }
+        }
+        appObserver = workspace.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.applyFullscreenVisibility()
+            }
+        }
+
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                self?.applyFullscreenVisibility()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        fullscreenTimer = timer
 
         moveObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didMoveNotification,
@@ -120,6 +153,13 @@ final class NotchController {
         if let moveObserver {
             NotificationCenter.default.removeObserver(moveObserver)
         }
+        if let spaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(spaceObserver)
+        }
+        if let appObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(appObserver)
+        }
+        fullscreenTimer?.invalidate()
         if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
         if let dragGlobalMonitor { NSEvent.removeMonitor(dragGlobalMonitor) }
     }
@@ -332,8 +372,59 @@ final class NotchController {
         }
     }
 
+    private func applyFullscreenVisibility() {
+        let shouldHide = drag == nil && displayHasFullscreenCover()
+        guard shouldHide != chromeHidden else { return }
+        chromeHidden = shouldHide
+        if shouldHide {
+            hover.hoveredID = nil
+            tooltipPanel.alphaValue = 0
+            tooltipPanel.orderOut(nil)
+            notchPanel.orderOut(nil)
+        } else {
+            reposition()
+            notchPanel.orderFrontRegardless()
+        }
+    }
+
+    private func displayHasFullscreenCover() -> Bool {
+        guard let screen = currentDisplay(),
+              let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+        else {
+            return NSApp.currentSystemPresentationOptions.contains(.fullScreen)
+        }
+
+        let screenBounds = CGDisplayBounds(displayID)
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let windows = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
+            return NSApp.currentSystemPresentationOptions.contains(.fullScreen)
+        }
+
+        let ourPID = Int(ProcessInfo.processInfo.processIdentifier)
+        for window in windows {
+            if (window[kCGWindowOwnerPID as String] as? NSNumber)?.intValue == ourPID { continue }
+            if (window[kCGWindowLayer as String] as? NSNumber)?.intValue != 0 { continue }
+            if let alpha = (window[kCGWindowAlpha as String] as? NSNumber)?.doubleValue, alpha < 0.05 { continue }
+            guard let bounds = window[kCGWindowBounds as String] as? [String: CGFloat],
+                  let x = bounds["X"], let y = bounds["Y"],
+                  let width = bounds["Width"], let height = bounds["Height"]
+            else { continue }
+            if coversScreen(CGRect(x: x, y: y, width: width, height: height), screen: screenBounds) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private func coversScreen(_ window: CGRect, screen: CGRect) -> Bool {
+        let visible = window.intersection(screen)
+        guard !visible.isNull, screen.width > 0, screen.height > 0 else { return false }
+        let coverage = (visible.width * visible.height) / (screen.width * screen.height)
+        return coverage >= 0.98 && window.height >= screen.height - 2
+    }
+
     private func updateTooltip(for profileID: String?) {
-        guard let profileID,
+        guard !chromeHidden, let profileID,
               let index = store.profiles.firstIndex(where: { $0.id == profileID })
         else {
             hover.caretShift = .zero
@@ -378,7 +469,6 @@ final class NotchController {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [
             .canJoinAllSpaces,
-            .fullScreenAuxiliary,
             .fullScreenDisallowsTiling,
             .stationary,
         ]
