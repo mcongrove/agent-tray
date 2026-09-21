@@ -181,10 +181,12 @@ extension Date {
         return formatter.localizedString(for: self, relativeTo: Date())
     }
 
-    var weekdayTimeDescription: String {
+    var resetDescription: String {
         let formatter = DateFormatter()
         formatter.locale = .current
-        formatter.dateFormat = "EEE h:mm a"
+        formatter.dateFormat = "MMM d h:mma"
+        formatter.amSymbol = formatter.amSymbol.lowercased()
+        formatter.pmSymbol = formatter.pmSymbol.lowercased()
         return formatter.string(from: self)
     }
 

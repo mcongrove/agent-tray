@@ -17,7 +17,7 @@ final class NotchController {
     private var mouseMonitor: Any?
     private var dragGlobalMonitor: Any?
     private var fullscreenTimer: Timer?
-    private var chromeHidden = false
+    private var chromeHidden = true
     private var profileObserver: AnyCancellable?
     private var hoverObserver: AnyCancellable?
     private var positionObserver: AnyCancellable?

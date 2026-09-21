@@ -193,7 +193,7 @@ private struct UsageTooltip: View {
                     .foregroundStyle(.white)
                 Spacer(minLength: 8)
                 if let reset = window.resetsAt {
-                    Text("Resets \(reset.weekdayTimeDescription)")
+                    Text("Resets \(reset.resetDescription)")
                         .font(.system(size: 11))
                         .foregroundStyle(Color.white.opacity(0.48))
                         .lineLimit(1)
