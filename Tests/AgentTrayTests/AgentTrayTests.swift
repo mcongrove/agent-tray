@@ -6,7 +6,10 @@ struct AgentTrayTests {
 
     static func main() async throws {
         discoversModelProvidersWithoutDuplicates()
+        hiddenKindsPersistAndToggle()
         decodesCodexUsageAndRateLimits()
+        decodesCurrentCodexRateLimitsPayload()
+        try await jsonRPCWaitsForInitializeBeforeNextRequest()
         decodesCursorUsageWindows()
         cursorLocalActivityCountsSessions()
         try grokLogAggregatesNetTokensAndLatestQuota()
@@ -53,6 +56,28 @@ struct AgentTrayTests {
         )
     }
 
+    static func hiddenKindsPersistAndToggle() {
+        let suite = "agent-tray.tests.hidden-kinds"
+        guard let defaults = UserDefaults(suiteName: suite) else {
+            failures += 1
+            fputs("FAIL: hidden kinds defaults suite\n", stderr)
+            return
+        }
+        defaults.removePersistentDomain(forName: suite)
+
+        let settings = AppSettings(defaults: defaults)
+        expect(!settings.isHidden(.codex) && !settings.isHidden(.cursor) && !settings.isHidden(.grok), "kinds visible by default")
+        settings.toggleHidden(.codex)
+        expect(settings.isHidden(.codex), "codex hidden after toggle")
+        expect(!settings.isHidden(.cursor), "other kinds stay visible")
+
+        let reloaded = AppSettings(defaults: defaults)
+        expect(reloaded.isHidden(.codex), "hidden kinds persist")
+        expect(reloaded.hiddenKinds == [.codex], "only toggled kind is stored")
+        reloaded.toggleHidden(.codex)
+        expect(!reloaded.isHidden(.codex), "show restores visibility")
+    }
+
     static func decodesCodexUsageAndRateLimits() {
         let stream = """
         {"id":1,"result":{"userAgent":"test"}}
@@ -72,6 +97,53 @@ struct AgentTrayTests {
         let dualWindows = CodexStatsProvider.quotaWindows(from: dualLimits)
         expect(dualWindows.map(\.label) == ["Weekly", "5-hour"], "Codex week and 5-hour windows")
         expect(dualWindows.map(\.usedPercent) == [42, 18], "Codex window percents")
+    }
+
+    static func decodesCurrentCodexRateLimitsPayload() {
+        let stream = """
+        {"id":1,"result":{"userAgent":"agent-tray/0.154.0"}}
+        {"method":"remoteControl/status/changed","params":{"status":"disabled"}}
+        {"id":2,"result":{"ordinaryUsageAllowed":true,"rateLimits":{"limitId":"codex","limitName":null,"primary":{"usedPercent":86,"windowDurationMins":300,"resetsAt":1790711924},"secondary":{"usedPercent":28,"windowDurationMins":10080,"resetsAt":1791263412},"credits":{"hasCredits":false,"unlimited":false,"balance":"0"},"planType":"plus"},"rateLimitsByLimitId":{"codex":{"limitId":"codex","primary":{"usedPercent":86,"windowDurationMins":300},"secondary":{"usedPercent":28,"windowDurationMins":10080},"planType":"plus"}},"rateLimitResetCredits":{"availableCount":3},"accountId":"abc"}}
+        {"id":3,"result":{"summary":{"lifetimeTokens":12},"dailyUsageBuckets":[{"startDate":"2026-09-29","tokens":4}]}}
+        """
+        let result = CodexStatsProvider.decodeResponses(Data(stream.utf8))
+        expect(result.rateLimits?.rateLimits.primary?.usedPercent == 86, "current Codex 5-hour decode")
+        expect(result.rateLimits?.rateLimits.secondary?.usedPercent == 28, "current Codex weekly decode")
+        expect(result.rateLimits?.rateLimits.credits?.balance == "0", "current Codex credits decode")
+        expect(result.usage?.summary.lifetimeTokens == 12, "current Codex usage decode")
+        expect(
+            CodexStatsProvider.quotaWindows(from: result.rateLimits).map(\.label) == ["5-hour", "Weekly"],
+            "current Codex window naming"
+        )
+    }
+
+    static func jsonRPCWaitsForInitializeBeforeNextRequest() async throws {
+        let script = """
+        import json, sys
+        first = json.loads(sys.stdin.readline())
+        if first.get("method") != "initialize":
+            raise SystemExit("expected initialize first")
+        print(json.dumps({"id": first["id"], "result": {"ok": True}}), flush=True)
+        notify = json.loads(sys.stdin.readline())
+        if notify.get("method") != "initialized":
+            raise SystemExit("expected initialized")
+        second = json.loads(sys.stdin.readline())
+        print(json.dumps({"id": second["id"], "result": {"pong": second.get("method")}}), flush=True)
+        """
+        let result = try await ProcessRunner.runJSONRPC(
+            executable: URL(fileURLWithPath: "/usr/bin/python3"),
+            arguments: ["-c", script],
+            exchanges: [
+                JSONRPCExchange(line: #"{"id":1,"method":"initialize","params":{}}"#, waitForID: 1),
+                JSONRPCExchange(line: #"{"method":"initialized","params":{}}"#),
+                JSONRPCExchange(line: #"{"id":2,"method":"account/rateLimits/read","params":null}"#, waitForID: 2),
+            ],
+            timeout: 4
+        )
+        expect(!result.timedOut, "jsonrpc handshake completed")
+        let text = String(data: result.standardOutput, encoding: .utf8) ?? ""
+        expect(text.contains("\"ok\"") || text.contains("\"ok\": true"), "jsonrpc collected initialize")
+        expect(text.contains("account/rateLimits/read"), "jsonrpc collected rate-limit reply")
     }
 
     static func decodesCursorUsageWindows() {
@@ -163,19 +235,26 @@ struct AgentTrayTests {
             }
             print("\(profile.displayName): quota=\(snapshot.quotaWindows.count), today=\(snapshot.activity.tokensToday.map(String.init) ?? "n/a"), week=\(snapshot.activity.tokensSevenDays.map(String.init) ?? "n/a"), sessions=\(snapshot.activity.recentSessions), health=\(snapshot.health)")
             if profile.id == "codex-default", let executable = profile.executableURL {
-                let requests = [
-                    #"{"id":1,"method":"initialize","params":{"clientInfo":{"name":"agent-tray-probe","version":"0.1.0"},"capabilities":{"experimentalApi":true}}}"#,
-                    #"{"method":"initialized","params":{}}"#,
-                    #"{"id":2,"method":"account/rateLimits/read","params":null}"#,
-                    #"{"id":3,"method":"account/usage/read","params":null}"#
-                ]
                 do {
-                    let process = try await ProcessRunner.run(
+                    let process = try await ProcessRunner.runJSONRPC(
                         executable: executable,
                         arguments: ["app-server", "--stdio"],
-                        standardInput: Data((requests.joined(separator: "\n") + "\n").utf8),
-                        inputCloseDelay: 2.0,
-                        timeout: 7
+                        exchanges: [
+                            JSONRPCExchange(
+                                line: #"{"id":1,"method":"initialize","params":{"clientInfo":{"name":"agent-tray-probe","version":"0.1.0"},"capabilities":{"experimentalApi":true}}}"#,
+                                waitForID: 1
+                            ),
+                            JSONRPCExchange(line: #"{"method":"initialized","params":{}}"#),
+                            JSONRPCExchange(
+                                line: #"{"id":2,"method":"account/rateLimits/read","params":null}"#,
+                                waitForID: 2
+                            ),
+                            JSONRPCExchange(
+                                line: #"{"id":3,"method":"account/usage/read","params":null}"#,
+                                waitForID: 3
+                            ),
+                        ],
+                        timeout: 10
                     )
                     let decoded = CodexStatsProvider.decodeResponses(process.standardOutput)
                     print("Codex transport: exit=\(process.exitCode), timedOut=\(process.timedOut), stdout=\(process.standardOutput.count), stderr=\(process.standardError.count), rateLimits=\(decoded.rateLimits != nil), usage=\(decoded.usage != nil)")

@@ -15,18 +15,37 @@ final class AppSettings: ObservableObject {
             }
         }
     }
+    @Published var hiddenKinds: Set<AgentKind> {
+        didSet { defaults.set(hiddenKinds.map(\.rawValue).sorted(), forKey: Keys.hiddenKinds) }
+    }
 
     private let defaults: UserDefaults
 
     private enum Keys {
         static let notchPosition = "notchPosition"
         static let notchOffset = "notchOffset"
+        static let hiddenKinds = "hiddenKinds"
     }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         notchPosition = NotchPosition(rawValue: defaults.string(forKey: Keys.notchPosition) ?? "") ?? .right
         notchOffset = defaults.object(forKey: Keys.notchOffset) == nil ? nil : CGFloat(defaults.double(forKey: Keys.notchOffset))
+        hiddenKinds = Set((defaults.stringArray(forKey: Keys.hiddenKinds) ?? []).compactMap(AgentKind.init(rawValue:)))
+    }
+
+    func isHidden(_ kind: AgentKind) -> Bool {
+        hiddenKinds.contains(kind)
+    }
+
+    func toggleHidden(_ kind: AgentKind) {
+        var next = hiddenKinds
+        if next.contains(kind) {
+            next.remove(kind)
+        } else {
+            next.insert(kind)
+        }
+        hiddenKinds = next
     }
 
     func enableLaunchAtLoginIfInstalled() {

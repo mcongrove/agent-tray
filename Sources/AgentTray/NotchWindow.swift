@@ -41,6 +41,14 @@ final class NotchController {
         menuActions.onRefresh = { [weak store] in
             Task { @MainActor in await store?.refresh() }
         }
+        menuActions.onToggleKind = { [weak self] kind in
+            guard let self else { return }
+            let revealing = self.settings.isHidden(kind)
+            self.settings.toggleHidden(kind)
+            if revealing {
+                Task { await self.store.refresh() }
+            }
+        }
 
         let container = NotchHitView()
         container.wantsLayer = true
@@ -360,6 +368,24 @@ final class NotchController {
         refresh.target = menuActions
         refresh.isEnabled = !store.isRefreshing
         menu.addItem(refresh)
+
+        let kinds = store.availableKinds
+        if !kinds.isEmpty {
+            menu.addItem(.separator())
+            for kind in kinds {
+                let hidden = settings.isHidden(kind)
+                let item = NSMenuItem(
+                    title: hidden ? "Show \(kind.displayName)" : "Hide \(kind.displayName)",
+                    action: #selector(NotchMenuActions.toggleKind(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = menuActions
+                item.representedObject = kind.rawValue
+                menu.addItem(item)
+            }
+        }
+
+        menu.addItem(.separator())
         let exit = NSMenuItem(
             title: "Exit",
             action: #selector(NotchMenuActions.exit),
@@ -489,9 +515,17 @@ final class NotchHoverState: ObservableObject {
 
 final class NotchMenuActions: NSObject {
     var onRefresh: (() -> Void)?
+    var onToggleKind: ((AgentKind) -> Void)?
 
     @objc func refresh() {
         onRefresh?()
+    }
+
+    @objc func toggleKind(_ sender: NSMenuItem) {
+        guard let raw = sender.representedObject as? String,
+              let kind = AgentKind(rawValue: raw)
+        else { return }
+        onToggleKind?(kind)
     }
 
     @objc func exit() {

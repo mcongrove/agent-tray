@@ -35,16 +35,15 @@ struct CodexStatsProvider: AgentStatsProvider {
         }
 
         do {
-            let result = try await ProcessRunner.run(
+            let result = try await ProcessRunner.runJSONRPC(
                 executable: executable,
                 arguments: arguments(for: profile),
-                standardInput: requestPayload(),
+                exchanges: quotaExchanges(),
                 environment: ProcessInfo.processInfo.environment,
-                inputCloseDelay: 2.0,
-                timeout: 7
+                timeout: 10
             )
 
-            if result.timedOut {
+            if result.timedOut && result.standardOutput.isEmpty {
                 return partial(profile: profile, activity: localActivity, message: "Codex quota timed out.")
             }
 
@@ -117,14 +116,22 @@ struct CodexStatsProvider: AgentStatsProvider {
         }
     }
 
-    private func requestPayload() -> Data {
-        let lines = [
-            #"{"id":1,"method":"initialize","params":{"clientInfo":{"name":"agent-tray","version":"0.1.0"},"capabilities":{"experimentalApi":true}}}"#,
-            #"{"method":"initialized","params":{}}"#,
-            #"{"id":2,"method":"account/rateLimits/read","params":null}"#,
-            #"{"id":3,"method":"account/usage/read","params":null}"#
+    private func quotaExchanges() -> [JSONRPCExchange] {
+        [
+            JSONRPCExchange(
+                line: #"{"id":1,"method":"initialize","params":{"clientInfo":{"name":"agent-tray","version":"0.1.0"},"capabilities":{"experimentalApi":true}}}"#,
+                waitForID: 1
+            ),
+            JSONRPCExchange(line: #"{"method":"initialized","params":{}}"#),
+            JSONRPCExchange(
+                line: #"{"id":2,"method":"account/rateLimits/read","params":null}"#,
+                waitForID: 2
+            ),
+            JSONRPCExchange(
+                line: #"{"id":3,"method":"account/usage/read","params":null}"#,
+                waitForID: 3
+            ),
         ]
-        return Data((lines.joined(separator: "\n") + "\n").utf8)
     }
 
     static func decodeResponses(_ data: Data) -> (rateLimits: CodexRateLimitsResponse?, usage: CodexUsageResponse?) {

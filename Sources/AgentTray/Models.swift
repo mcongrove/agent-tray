@@ -19,6 +19,8 @@ enum AgentKind: String, Codable, Sendable {
         case .codex: "circle.hexagongrid"
         }
     }
+
+    var displayName: String { rawValue.capitalized }
 }
 
 enum CodexSelection: Codable, Hashable, Sendable {

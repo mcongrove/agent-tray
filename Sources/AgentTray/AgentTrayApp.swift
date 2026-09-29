@@ -28,7 +28,7 @@ final class AppRuntime {
 
     init() {
         let settings = AppSettings()
-        let store = StatsStore()
+        let store = StatsStore(settings: settings)
         self.settings = settings
         self.store = store
         notch = NotchController(store: store, settings: settings)

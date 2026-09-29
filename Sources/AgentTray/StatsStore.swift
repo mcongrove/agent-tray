@@ -8,18 +8,35 @@ final class StatsStore: ObservableObject {
     @Published private(set) var isRefreshing = false
     @Published private(set) var lastRefresh: Date?
 
+    private(set) var allProfiles: [AgentProfile] = []
+
+    var availableKinds: [AgentKind] {
+        var seen = Set<AgentKind>()
+        return allProfiles.compactMap { seen.insert($0.kind).inserted ? $0.kind : nil }
+    }
+
     private let catalog: ProfileCatalog
     private let cache: SnapshotCache
+    private let settings: AppSettings
+    private var hiddenObserver: AnyCancellable?
     private var refreshLoop: Task<Void, Never>?
     private var started = false
 
     init(
         catalog: ProfileCatalog = ProfileCatalog(),
-        cache: SnapshotCache = SnapshotCache()
+        cache: SnapshotCache = SnapshotCache(),
+        settings: AppSettings
     ) {
         self.catalog = catalog
         self.cache = cache
+        self.settings = settings
         reloadProfiles()
+        hiddenObserver = settings.$hiddenKinds
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.reloadProfiles()
+            }
         Task { await start() }
     }
 
@@ -42,7 +59,8 @@ final class StatsStore: ObservableObject {
     }
 
     func reloadProfiles() {
-        profiles = catalog.discover()
+        allProfiles = catalog.discover()
+        profiles = allProfiles.filter { !settings.hiddenKinds.contains($0.kind) }
     }
 
     func refresh() async {
