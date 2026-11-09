@@ -6,6 +6,8 @@ struct AgentTrayTests {
 
     static func main() async throws {
         discoversModelProvidersWithoutDuplicates()
+        try codexDiscoveryPreservesExistingInstallations()
+        tooltipPlacementStaysAttached()
         hiddenKindsPersistAndToggle()
         decodesCodexUsageAndRateLimits()
         decodesCurrentCodexRateLimitsPayload()
@@ -65,6 +67,91 @@ struct AgentTrayTests {
             "native Codex vendor path"
         )
         expect(ProfileCatalog.isCurrentArchitectureMachO(URL(fileURLWithPath: "/usr/bin/true")), "host Mach-O is accepted")
+        let bundled = URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex")
+        expect(ProfileCatalog.executableCandidates(
+            named: "codex", preferred: ProfileCatalog.preferredCodexExecutable(homeDirectory: URL(fileURLWithPath: "/Users/test")),
+            homeDirectory: URL(fileURLWithPath: "/Users/test"), environment: [:]
+        ).contains(bundled), "current ChatGPT bundle layout is searched")
+        if FileManager.default.fileExists(atPath: bundled.path) {
+            expect(ProfileCatalog.resolvedExecutable(at: bundled, name: "codex", fileManager: .default) == bundled, "bundled native CLI is usable")
+        }
+    }
+
+    static func codexDiscoveryPreservesExistingInstallations() throws {
+        let fm = FileManager.default
+        let home = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: home) }
+        let preferred = ProfileCatalog.preferredCodexExecutable(homeDirectory: home)
+        try fm.createDirectory(at: preferred.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fm.copyItem(at: URL(fileURLWithPath: "/usr/bin/true"), to: preferred)
+        let environment = ["PATH": "/custom/bin:/another/bin", "CODEX_HOME": home.appendingPathComponent(".codex").path]
+        let candidates = ProfileCatalog.executableCandidates(named: "codex", preferred: preferred, homeDirectory: home, environment: environment)
+        let legacy = [preferred] + ProfileCatalog.wellKnownExecutableLocations(named: "codex", homeDirectory: home)
+            + [URL(fileURLWithPath: "/custom/bin/codex"), URL(fileURLWithPath: "/another/bin/codex")]
+        expect(Array(candidates.prefix(legacy.count)) == legacy, "all legacy candidates retain their priority ahead of bundle fallback")
+        for path in ["/opt/homebrew/bin/codex", "/usr/local/bin/codex", "/Applications/ChatGPT.app/Contents/Resources/codex", "/Applications/Codex.app/Contents/Resources/codex"] {
+            expect(legacy.contains(URL(fileURLWithPath: path)), "legacy installation remains supported: \(path)")
+        }
+        let profile = ProfileCatalog(environment: environment, homeDirectory: home).discover().first { $0.id == "codex-default" }
+        expect(profile?.executableURL == preferred, "existing local CLI wins even with bundled CLI installed")
+    }
+
+    static func tooltipPlacementStaysAttached() {
+        let displays = [
+            NSRect(x: 0, y: 0, width: 1440, height: 900),
+            NSRect(x: -2560, y: 0, width: 2560, height: 1440),
+            NSRect(x: 1920, y: -900, width: 1440, height: 900),
+            NSRect(x: 0, y: 1080, width: 1512, height: 982),
+        ]
+        var checked = 0
+        for display in displays {
+            // Model menu bars and Docks on the bottom, left, and right.
+            for insets: NSEdgeInsets in [
+                NSEdgeInsets(top: 24, left: 0, bottom: 70, right: 0),
+                NSEdgeInsets(top: 38, left: 70, bottom: 0, right: 0),
+                NSEdgeInsets(top: 24, left: 0, bottom: 0, right: 70),
+            ] {
+                let visible = NSRect(x: display.minX + insets.left, y: display.minY + insets.bottom,
+                    width: display.width - insets.left - insets.right, height: display.height - insets.top - insets.bottom)
+                for count in [1, 2, 4] {
+                    for position in [NotchPosition.top, .right, .bottom, .left] {
+                        let notchSize = NotchMetrics.panelSize(profileCount: count, position: position)
+                        let maximum = NotchMetrics.maxOffset(size: notchSize, in: display, position: position)
+                        for offset in [CGFloat(0), maximum / 2, maximum] {
+                            let notch = NSRect(origin: NotchMetrics.panelOrigin(size: notchSize, offset: offset, in: display, position: position), size: notchSize)
+                            expect(NotchMetrics.isFlush(notch, to: position, in: display), "notch stays on its display edge")
+                            for index in 0..<count {
+                                let meter = NotchMetrics.meterCenter(index: index, count: count, in: notch, position: position)
+                                for height: CGFloat in [74, 118, 190, 320] {
+                                    let size = NSSize(width: position.isHorizontal ? 248 : 254, height: height)
+                                    let placement = NotchMetrics.tooltipPlacement(size: size, meter: meter, position: position, in: visible)
+                                    expect(visible.contains(placement.frame), "tooltip stays on its display across Dock placements")
+                                    let clearance: CGFloat
+                                    switch position {
+                                    case .top: clearance = meter.y - placement.frame.maxY
+                                    case .bottom: clearance = placement.frame.minY - meter.y
+                                    case .left: clearance = placement.frame.minX - meter.x
+                                    case .right: clearance = meter.x - placement.frame.maxX
+                                    }
+                                    expect(clearance >= -0.5, "tooltip never overlaps notch")
+                                    // A Dock/menu bar may force separation; otherwise the tip touches the edge.
+                                    let unobstructed: Bool
+                                    switch position {
+                                    case .top: unobstructed = meter.y <= visible.maxY - 10
+                                    case .bottom: unobstructed = meter.y >= visible.minY + 10
+                                    case .left: unobstructed = meter.x >= visible.minX + 10
+                                    case .right: unobstructed = meter.x <= visible.maxX - 10
+                                    }
+                                    if unobstructed { expect(abs(clearance) < 0.5, "tooltip stays attached when system UI leaves room") }
+                                    checked += 1
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        print("Verified \(checked) tooltip placements across display and Dock layouts")
     }
 
     static func hiddenKindsPersistAndToggle() {

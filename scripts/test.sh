@@ -7,6 +7,7 @@ mkdir -p .build/checks
 
 xcrun swiftc -parse-as-library \
   Sources/AgentTray/Models.swift \
+  Sources/AgentTray/NotchMetrics.swift \
   Sources/AgentTray/ProfileCatalog.swift \
   Sources/AgentTray/ProcessRunner.swift \
   Sources/AgentTray/CodexStatsProvider.swift \

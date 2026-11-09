@@ -351,14 +351,33 @@ struct ProfileCatalog {
         return cpuType == hostCPU
     }
 
-    private func executable(named name: String, preferred: URL) -> URL? {
+    static func executableCandidates(
+        named name: String,
+        preferred: URL,
+        homeDirectory: URL,
+        environment: [String: String]
+    ) -> [URL] {
         var candidates = [preferred]
-        candidates.append(contentsOf: Self.wellKnownExecutableLocations(named: name, homeDirectory: homeDirectory))
+        candidates.append(contentsOf: wellKnownExecutableLocations(named: name, homeDirectory: homeDirectory))
         if let path = environment["PATH"] {
             candidates.append(contentsOf: path.split(separator: ":").map {
                 URL(fileURLWithPath: String($0)).appendingPathComponent(name)
             })
         }
+        // Keep every existing CLI installation ahead of the new bundle fallback.
+        if name == "codex" {
+            candidates.append(contentsOf: [
+                URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"),
+                URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"),
+            ])
+        }
+        return candidates
+    }
+
+    private func executable(named name: String, preferred: URL) -> URL? {
+        let candidates = Self.executableCandidates(
+            named: name, preferred: preferred, homeDirectory: homeDirectory, environment: environment
+        )
         var seen = Set<String>()
         return candidates.compactMap { candidate -> URL? in
             guard seen.insert(candidate.path).inserted else { return nil }

@@ -30,7 +30,7 @@ struct NotchView: View {
                     hover.hoveredID = nil
                 }
             }
-            .accessibilityElement(children: .combine)
+            .accessibilityElement(children: .ignore)
             .accessibilityLabel(accessibilityLabel(for: profile))
         }
 
@@ -88,7 +88,17 @@ struct NotchTooltipHost: View {
                 )
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+        .padding(caretEdge, 6)
+        .fixedSize()
+    }
+
+    private var caretEdge: Edge.Set {
+        switch settings.notchPosition {
+        case .right: .trailing
+        case .left: .leading
+        case .top: .top
+        case .bottom: .bottom
+        }
     }
 }
 
@@ -252,8 +262,8 @@ private struct UsageTooltip: View {
         switch position {
         case .right: .trailing
         case .left: .leading
-        case .top: .bottom
-        case .bottom: .top
+        case .top: .top
+        case .bottom: .bottom
         }
     }
 
@@ -266,8 +276,8 @@ private struct UsageTooltip: View {
         switch position {
         case .right: edge = CGSize(width: 6, height: 0)
         case .left: edge = CGSize(width: -6, height: 0)
-        case .top: edge = CGSize(width: 0, height: 6)
-        case .bottom: edge = CGSize(width: 0, height: -6)
+        case .top: edge = CGSize(width: 0, height: -6)
+        case .bottom: edge = CGSize(width: 0, height: 6)
         }
         return CGSize(width: edge.width + caretShift.width, height: edge.height + caretShift.height)
     }
@@ -288,11 +298,11 @@ private struct TooltipCaret: Shape {
             path.move(to: CGPoint(x: rect.maxX, y: rect.minY))
             path.addLine(to: CGPoint(x: rect.minX, y: rect.midY))
             path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-        case .top:
+        case .bottom:
             path.move(to: CGPoint(x: rect.minX, y: rect.minY))
             path.addLine(to: CGPoint(x: rect.midX, y: rect.maxY))
             path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-        case .bottom:
+        case .top:
             path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
             path.addLine(to: CGPoint(x: rect.midX, y: rect.minY))
             path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
