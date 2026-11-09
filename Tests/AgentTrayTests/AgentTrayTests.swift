@@ -11,6 +11,10 @@ struct AgentTrayTests {
         decodesCurrentCodexRateLimitsPayload()
         try await jsonRPCWaitsForInitializeBeforeNextRequest()
         decodesCursorUsageWindows()
+        decodesClaudeUsageWindows()
+        selectsClaudeDesktopToken()
+        grokBillingNamesTheWindowFromThePeriod()
+        try omitsGrokBecauseBillingIsUnifiedWithCursor()
         cursorLocalActivityCountsSessions()
         try grokLogAggregatesNetTokensAndLatestQuota()
         try codexLocalTokenTotalsUseCumulativeDeltas()
@@ -54,6 +58,13 @@ struct AgentTrayTests {
             locations.contains(URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex")),
             "ChatGPT-bundled Codex discovery"
         )
+        expect(
+            ProfileCatalog.nativeCodexVendorPath(packageRoot: URL(fileURLWithPath: "/tmp/pkg"))
+                .path
+                .contains("node_modules/@openai/\(ProfileCatalog.codexPlatformPackage)/vendor/\(ProfileCatalog.codexTargetTriple)/bin/codex"),
+            "native Codex vendor path"
+        )
+        expect(ProfileCatalog.isCurrentArchitectureMachO(URL(fileURLWithPath: "/usr/bin/true")), "host Mach-O is accepted")
     }
 
     static func hiddenKindsPersistAndToggle() {
@@ -66,7 +77,10 @@ struct AgentTrayTests {
         defaults.removePersistentDomain(forName: suite)
 
         let settings = AppSettings(defaults: defaults)
-        expect(!settings.isHidden(.codex) && !settings.isHidden(.cursor) && !settings.isHidden(.grok), "kinds visible by default")
+        expect(
+            !settings.isHidden(.codex) && !settings.isHidden(.cursor) && !settings.isHidden(.claude) && !settings.isHidden(.grok),
+            "kinds visible by default"
+        )
         settings.toggleHidden(.codex)
         expect(settings.isHidden(.codex), "codex hidden after toggle")
         expect(!settings.isHidden(.cursor), "other kinds stay visible")
@@ -156,6 +170,87 @@ struct AgentTrayTests {
         expect(windows[0].usedPercent == 22, "Cursor models percent")
         expect(windows[1].usedPercent == 39, "Cursor other-models percent")
         expect(windows[2].detail == "$5 / $20", "Cursor on-demand detail")
+
+        let rfc3339 = """
+        {"billingCycleStart":"2026-09-01T00:00:00.000Z","billingCycleEnd":"2026-10-01T00:00:00.000Z","planUsage":{"autoPercentUsed":10,"apiPercentUsed":20}}
+        """
+        let dated = CursorStatsProvider.decodePeriodUsage(Data(rfc3339.utf8))
+        expect(dated?.planUsage?.autoPercentUsed == 10, "Cursor RFC3339 usage decode")
+        expect(dated?.billingCycleEnd?.date != nil, "Cursor RFC3339 reset decode")
+    }
+
+    static func decodesClaudeUsageWindows() {
+        let wrapped = """
+        {"rate_limits_available":true,"subscription_type":"pro","rate_limits":{"five_hour":{"utilization":3,"resets_at":"2026-10-26T09:50:00.344946+00:00"},"seven_day":{"utilization":1,"resets_at":"2026-11-02T04:00:00.344969+00:00"},"limits":[{"kind":"session","percent":3,"resets_at":"2026-10-26T09:50:00.344946+00:00"},{"kind":"weekly_all","percent":1,"resets_at":"2026-11-02T04:00:00.344969+00:00"},{"kind":"weekly_scoped","percent":12,"scope":{"model":{"display_name":"Fable"}}}]}}
+        """
+        let decoded = ClaudeStatsProvider.decodeUsage(Data(wrapped.utf8))
+        expect(decoded?.planName == "pro", "Claude plan")
+        expect(decoded?.windows.map(\.label) == ["5-hour", "Weekly", "Fable"], "Claude window labels")
+        expect(decoded?.windows.map(\.usedPercent) == [3, 1, 12], "Claude window percents")
+        expect(decoded?.windows[0].durationMinutes == 300, "Claude 5-hour duration")
+        expect(decoded?.windows[1].durationMinutes == 10_080, "Claude weekly duration")
+        expect(decoded?.windows[2].durationMinutes == nil, "Claude model window stays off the weekly ring")
+        expect(decoded?.windows[0].resetsAt != nil, "Claude reset time")
+
+        let legacy = """
+        {"five_hour":{"utilization":42,"resets_at":"2026-10-26T09:50:00Z"},"seven_day":null}
+        """
+        let legacyWindows = ClaudeStatsProvider.decodeUsage(Data(legacy.utf8))?.windows ?? []
+        expect(legacyWindows.map(\.label) == ["5-hour"], "Claude legacy window")
+        expect(legacyWindows.first?.usedPercent == 42, "Claude legacy percent")
+
+        let stream = #"{"type":"control_response","response":{"request_id":"usage","response":{"rate_limits_available":false}}}"#
+        expect(ClaudeStatsProvider.usagePayload(from: Data(stream.utf8)) != nil, "Claude usage payload")
+    }
+
+    static func selectsClaudeDesktopToken() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let entries: [String: Any] = [
+            "acct|client:user:profile": [
+                "token": "old",
+                "expiresAt": now.timeIntervalSince1970 * 1_000 - 1_000,
+                "subscriptionType": "pro",
+            ],
+            "acct|client:user:inference user:sessions:claude_code": [
+                "token": "code",
+                "expiresAt": now.timeIntervalSince1970 * 1_000 + 3_600_000,
+                "subscriptionType": "max",
+            ],
+        ]
+        let selected = ClaudeStatsProvider.selectDesktopToken(entries: entries, now: now)
+        expect(selected?.token == "code", "Claude prefers a live Claude Code token")
+        expect(selected?.subscription == "max", "Claude token plan")
+    }
+
+    static func grokBillingNamesTheWindowFromThePeriod() {
+        let weekly = """
+        {"config":{"creditUsagePercent":18.4,"currentPeriod":{"start":"2026-10-20T00:00:00Z","end":"2026-10-27T00:00:00Z"}}}
+        """
+        let windows = GrokStatsProvider.quotaWindows(fromBilling: Data(weekly.utf8))
+        expect(windows.first?.label == "Weekly", "Grok weekly billing window")
+        expect(windows.first?.usedPercent == 18, "Grok billing percent")
+        expect(windows.first?.durationMinutes == 10_080, "Grok weekly duration")
+        expect(windows.first?.resetsAt != nil, "Grok billing reset")
+
+        let daily = """
+        {"config":{"creditUsagePercent":4,"currentPeriod":{"start":"2026-10-26T00:00:00Z","end":"2026-10-27T00:00:00Z"}}}
+        """
+        expect(GrokStatsProvider.quotaWindows(fromBilling: Data(daily.utf8)).first?.label == "Daily", "Grok daily billing window")
+
+        let auth = #"{"https://auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828":{"key":"abc","auth_mode":"oauth"},"https://accounts.x.ai/sign-in":{"key":"legacy","auth_mode":"api_key"}}"#
+        expect(GrokStatsProvider.accessToken(in: Data(auth.utf8)) == "abc", "Grok first-party token")
+        let apiKey = #"{"https://auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828":{"key":"abc","auth_mode":"api_key"}}"#
+        expect(GrokStatsProvider.accessToken(in: Data(apiKey.utf8)) == nil, "Grok API keys are not plan logins")
+    }
+
+    static func omitsGrokBecauseBillingIsUnifiedWithCursor() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agent-tray-grok-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(".grok/logs"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("{}".utf8).write(to: root.appendingPathComponent(".grok/auth.json"))
+        try Data("".utf8).write(to: root.appendingPathComponent(".grok/logs/unified.jsonl"))
+        let catalog = ProfileCatalog(environment: ["PATH": "/nonexistent", "GROK_HOME": root.appendingPathComponent(".grok").path], homeDirectory: root)
+        expect(!catalog.discover().contains { $0.kind == .grok }, "Grok is not a separate notch entry")
     }
 
     static func cursorLocalActivityCountsSessions() {
@@ -231,6 +326,7 @@ struct AgentTrayTests {
             switch profile.kind {
             case .grok: snapshot = await GrokStatsProvider().snapshot(for: profile)
             case .cursor: snapshot = await CursorStatsProvider().snapshot(for: profile)
+            case .claude: snapshot = await ClaudeStatsProvider().snapshot(for: profile)
             case .codex: snapshot = await CodexStatsProvider().snapshot(for: profile)
             }
             print("\(profile.displayName): quota=\(snapshot.quotaWindows.count), today=\(snapshot.activity.tokensToday.map(String.init) ?? "n/a"), week=\(snapshot.activity.tokensSevenDays.map(String.init) ?? "n/a"), sessions=\(snapshot.activity.recentSessions), health=\(snapshot.health)")

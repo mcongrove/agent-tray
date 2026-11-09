@@ -56,6 +56,11 @@ do
   fi
 done
 
+mark_dir="$project_root/Sources/AgentTray/Resources/marks"
+if [[ -d "$mark_dir" ]]; then
+  cp "$mark_dir"/*.png "$app_dir/Contents/Resources/AgentTray_AgentTray.bundle/"
+fi
+
 codesign --force --sign - "$app_dir"
 
 dest="/Applications/Agent Tray.app"

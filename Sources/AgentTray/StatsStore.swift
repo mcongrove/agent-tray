@@ -95,6 +95,8 @@ final class StatsStore: ObservableObject {
                 return await GrokStatsProvider().snapshot(for: profile)
             case .cursor:
                 return await CursorStatsProvider().snapshot(for: profile)
+            case .claude:
+                return await ClaudeStatsProvider().snapshot(for: profile)
             case .codex:
                 return await CodexStatsProvider().snapshot(for: profile)
             }

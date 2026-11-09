@@ -11,6 +11,7 @@ xcrun swiftc -parse-as-library \
   Sources/AgentTray/ProcessRunner.swift \
   Sources/AgentTray/CodexStatsProvider.swift \
   Sources/AgentTray/CursorStatsProvider.swift \
+  Sources/AgentTray/ClaudeStatsProvider.swift \
   Sources/AgentTray/GrokStatsProvider.swift \
   Tests/AgentTrayTests/AgentTrayTests.swift \
   -o .build/checks/AgentTrayTests

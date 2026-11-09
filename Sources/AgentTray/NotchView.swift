@@ -62,9 +62,9 @@ struct NotchView: View {
            let other = snapshot?.cursorOtherPercent {
             return "\(profile.displayName) Cursor models \(remainingPercent(models)) percent remaining, other models \(remainingPercent(other)) percent remaining"
         }
-        if profile.kind == .codex,
-           let weekly = snapshot?.codexWeeklyPercent,
-           let fiveHour = snapshot?.codexFiveHourPercent {
+        if profile.kind == .codex || profile.kind == .claude,
+           let weekly = snapshot?.weeklyPercent,
+           let fiveHour = snapshot?.fiveHourPercent {
             return "\(profile.displayName) weekly \(remainingPercent(weekly)) percent remaining, 5-hour \(remainingPercent(fiveHour)) percent remaining"
         }
         let percent = snapshot?.headlinePercent ?? 0
@@ -106,9 +106,9 @@ private struct NotchMeter: View {
                     .frame(width: NotchMetrics.ringSize, height: NotchMetrics.ringSize)
                 UsageRing(progress: Double(other) / 100, lineWidth: 2)
                     .frame(width: NotchMetrics.innerRingSize, height: NotchMetrics.innerRingSize)
-            } else if profile.kind == .codex,
-                      let weekly = snapshot?.codexWeeklyPercent,
-                      let fiveHour = snapshot?.codexFiveHourPercent {
+            } else if profile.kind == .codex || profile.kind == .claude,
+                      let weekly = snapshot?.weeklyPercent,
+                      let fiveHour = snapshot?.fiveHourPercent {
                 UsageRing(progress: Double(weekly) / 100, lineWidth: 2.5)
                     .frame(width: NotchMetrics.ringSize, height: NotchMetrics.ringSize)
                 UsageRing(progress: Double(fiveHour) / 100, lineWidth: 2)
@@ -117,13 +117,47 @@ private struct NotchMeter: View {
                 UsageRing(progress: Double(snapshot?.headlinePercent ?? 0) / 100, lineWidth: 2.5)
                     .frame(width: NotchMetrics.ringSize, height: NotchMetrics.ringSize)
             }
-            Image(systemName: profile.kind.symbolName)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white)
+            ProviderMark(kind: profile.kind, side: 18)
         }
         .scaleEffect(hovered ? 1.06 : 1)
         .frame(width: NotchMetrics.ringSize, height: NotchMetrics.ringSize)
         .contentShape(Rectangle())
+    }
+}
+
+private struct ProviderMark: View {
+    let kind: AgentKind
+    var side: CGFloat
+
+    var body: some View {
+        Image(nsImage: ProviderMarkCache.image(for: kind))
+            .resizable()
+            .renderingMode(.template)
+            .foregroundStyle(.white)
+            .frame(width: side, height: side)
+            .accessibilityHidden(true)
+    }
+}
+
+private enum ProviderMarkCache {
+    private static let images: [AgentKind: NSImage] = {
+        var loaded: [AgentKind: NSImage] = [:]
+        for kind in AgentKind.allCases {
+            let url = Bundle.module.url(forResource: resourceName(for: kind), withExtension: "png")
+            if let url, let image = NSImage(contentsOf: url) {
+                loaded[kind] = image
+            }
+        }
+        return loaded
+    }()
+
+    static func image(for kind: AgentKind) -> NSImage {
+        images[kind] ?? NSImage(systemSymbolName: kind.symbolName, accessibilityDescription: kind.displayName) ?? NSImage()
+    }
+
+    // Unified Cursor/Grok billing keeps the Cursor row and shows the Grok mark.
+    private static func resourceName(for kind: AgentKind) -> String {
+        kind == .cursor ? AgentKind.grok.rawValue : kind.rawValue
     }
 }
 
@@ -152,8 +186,7 @@ private struct UsageTooltip: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
-                Image(systemName: profile.kind.symbolName)
-                    .font(.system(size: 12, weight: .semibold))
+                ProviderMark(kind: profile.kind, side: 14)
                 Text("\(profile.displayName) Usage")
                     .font(.system(size: 13, weight: .semibold))
             }

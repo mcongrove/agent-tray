@@ -29,11 +29,9 @@ struct CursorStatsProvider: AgentStatsProvider {
 
         do {
             let token = try await Self.validAccessToken(session: session)
-            async let usageData = Self.postDashboard("GetCurrentPeriodUsage", token: token)
+            let usage = Self.decodePeriodUsage((try? await Self.postDashboard("GetCurrentPeriodUsage", token: token)) ?? Data())
             async let planData = Self.postDashboard("GetPlanInfo", token: token)
             async let eventsData = Self.postDashboard("GetAggregatedUsageEvents", token: token)
-
-            let usage = Self.decodePeriodUsage((try? await usageData) ?? Data())
             let plan = Self.decodePlanInfo((try? await planData) ?? Data())
             let events = Self.decodeAggregatedEvents((try? await eventsData) ?? Data())
 
@@ -213,7 +211,7 @@ struct CursorStatsProvider: AgentStatsProvider {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.timeoutIntervalForRequest = 8
         configuration.timeoutIntervalForResource = 10
-        configuration.waitsForConnectivity = false
+        configuration.waitsForConnectivity = true
         return URLSession(configuration: configuration, delegate: nil, delegateQueue: OperationQueue())
     }()
 
@@ -416,9 +414,17 @@ struct CursorMillisDate: Decodable {
             date = Date(timeIntervalSince1970: value / 1_000)
             return
         }
-        if let text = try? container.decode(String.self), let value = Double(text) {
-            date = Date(timeIntervalSince1970: value / 1_000)
-            return
+        if let text = try? container.decode(String.self) {
+            if let value = Double(text) {
+                date = Date(timeIntervalSince1970: value / 1_000)
+                return
+            }
+            let fractional = ISO8601DateFormatter()
+            fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let parsed = fractional.date(from: text) ?? ISO8601DateFormatter().date(from: text) {
+                date = parsed
+                return
+            }
         }
         throw DecodingError.dataCorruptedError(in: container, debugDescription: "Unsupported Cursor timestamp")
     }

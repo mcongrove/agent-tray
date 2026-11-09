@@ -39,12 +39,12 @@ struct CodexStatsProvider: AgentStatsProvider {
                 executable: executable,
                 arguments: arguments(for: profile),
                 exchanges: quotaExchanges(),
-                environment: ProcessInfo.processInfo.environment,
+                environment: ProcessRunner.launchEnvironment(),
                 timeout: 10
             )
 
-            if result.timedOut && result.standardOutput.isEmpty {
-                return partial(profile: profile, activity: localActivity, message: "Codex quota timed out.")
+            if result.standardOutput.isEmpty {
+                return partial(profile: profile, activity: localActivity, message: quotaFailureMessage(result))
             }
 
             let responses = Self.decodeResponses(result.standardOutput)
@@ -89,6 +89,17 @@ struct CodexStatsProvider: AgentStatsProvider {
         case .namedProfile(let name): return name.capitalized
         default: return "External provider"
         }
+    }
+
+    private func quotaFailureMessage(_ result: ProcessResult) -> String {
+        let stderr = String(data: result.standardError, encoding: .utf8) ?? ""
+        if stderr.contains("codex-darwin-arm64") || stderr.contains("Missing optional dependency") {
+            return "Codex CLI is missing its Apple Silicon binary."
+        }
+        if result.timedOut {
+            return "Codex quota timed out."
+        }
+        return "Quota is unavailable for this profile. Local activity is still shown."
     }
 
     private func partial(profile: AgentProfile, activity: ActivitySummary, message: String) -> AgentSnapshot {

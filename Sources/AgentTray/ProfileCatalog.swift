@@ -83,25 +83,25 @@ struct ProfileCatalog {
 
     func discover() -> [AgentProfile] {
         var profiles: [AgentProfile] = []
-        let grokHome = environment["GROK_HOME"].map(URL.init(fileURLWithPath:))
-            ?? homeDirectory.appendingPathComponent(".grok")
-        let grokExecutable = executable(named: "grok", preferred: grokHome.appendingPathComponent("bin/grok"))
-        if fileManager.fileExists(atPath: grokHome.path) || grokExecutable != nil {
-            profiles.append(AgentProfile(
-                id: "grok-default",
-                kind: .grok,
-                displayName: "Grok",
-                codexSelection: nil,
-                executableURL: grokExecutable
-            ))
-        }
 
+        // Cursor and Grok share one bill, so Grok is not its own notch entry.
         if cursorIsPresent() {
             profiles.append(AgentProfile(
                 id: "cursor-default",
                 kind: .cursor,
                 displayName: "Cursor",
                 executableURL: URL(fileURLWithPath: "/Applications/Cursor.app")
+            ))
+        }
+
+        if claudeIsPresent() {
+            let claudeHome = environment["CLAUDE_CONFIG_DIR"].map(URL.init(fileURLWithPath:))
+                ?? homeDirectory.appendingPathComponent(".claude")
+            profiles.append(AgentProfile(
+                id: "claude-default",
+                kind: .claude,
+                displayName: "Claude",
+                executableURL: executable(named: "claude", preferred: claudeHome.appendingPathComponent("bin/claude"))
             ))
         }
 
@@ -199,6 +199,27 @@ struct ProfileCatalog {
         }
     }
 
+    static func bundledClaudeExecutables(homeDirectory: URL) -> [URL] {
+        let root = homeDirectory.appendingPathComponent("Library/Application Support/Claude/claude-code")
+        guard let versions = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        let sorted = versions.sorted {
+            $0.lastPathComponent.compare($1.lastPathComponent, options: .numeric) == .orderedDescending
+        }
+        return sorted.flatMap { version in
+            let builds = (try? FileManager.default.contentsOfDirectory(
+                at: version,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            )) ?? []
+            return builds.map { $0.appendingPathComponent("claude.app/Contents/MacOS/claude") }
+        }
+    }
+
     static func preferredCodexExecutable(homeDirectory: URL) -> URL {
         homeDirectory.appendingPathComponent(".local/bin/codex")
     }
@@ -209,14 +230,125 @@ struct ProfileCatalog {
             URL(fileURLWithPath: "/opt/homebrew/bin/\(name)"),
             URL(fileURLWithPath: "/usr/local/bin/\(name)"),
         ]
+        if name == "claude" {
+            locations.append(contentsOf: bundledClaudeExecutables(homeDirectory: homeDirectory))
+        }
         if name == "codex" {
             locations.append(contentsOf: [
                 URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex"),
                 URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex"),
                 homeDirectory.appendingPathComponent(".codex/bin/codex"),
             ])
+            locations.append(contentsOf: npmCodexLocations(homeDirectory: homeDirectory))
         }
         return locations
+    }
+
+    static func nativeCodexVendorPath(packageRoot: URL) -> URL {
+        packageRoot
+            .appendingPathComponent("node_modules/@openai/\(codexPlatformPackage)/vendor/\(codexTargetTriple)/bin/codex")
+    }
+
+    static var codexTargetTriple: String {
+        #if arch(arm64)
+        "aarch64-apple-darwin"
+        #else
+        "x86_64-apple-darwin"
+        #endif
+    }
+
+    static var codexPlatformPackage: String {
+        #if arch(arm64)
+        "codex-darwin-arm64"
+        #else
+        "codex-darwin-x64"
+        #endif
+    }
+
+    static func npmCodexLocations(homeDirectory: URL) -> [URL] {
+        var packageRoots = [
+            URL(fileURLWithPath: "/usr/local/lib/node_modules/@openai/codex"),
+            URL(fileURLWithPath: "/opt/homebrew/lib/node_modules/@openai/codex"),
+        ]
+        packageRoots.append(contentsOf: nodeInstallPackageRoots(
+            in: homeDirectory.appendingPathComponent(".nvm/versions/node"),
+            relativePath: "lib/node_modules/@openai/codex"
+        ))
+        packageRoots.append(contentsOf: nodeInstallPackageRoots(
+            in: homeDirectory.appendingPathComponent(".harness/runtime"),
+            relativePath: "lib/node_modules/@openai/codex"
+        ))
+
+        return packageRoots.flatMap { root in
+            [
+                nativeCodexVendorPath(packageRoot: root),
+                root.appendingPathComponent("bin/codex.js"),
+            ]
+        }
+    }
+
+    private static func nodeInstallPackageRoots(in directory: URL, relativePath: String) -> [URL] {
+        guard let versions = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+        return versions.map { $0.appendingPathComponent(relativePath) }
+    }
+
+    static func resolvedExecutable(at url: URL, name: String, fileManager: FileManager) -> URL? {
+        let real = url.resolvingSymlinksInPath()
+        guard fileManager.isExecutableFile(atPath: url.path) || fileManager.isExecutableFile(atPath: real.path) else {
+            return nil
+        }
+        guard name == "codex" else { return real }
+
+        if let native = nativeCodexBinary(near: real, fileManager: fileManager) {
+            return native
+        }
+        return isCurrentArchitectureMachO(real) ? real : nil
+    }
+
+    static func nativeCodexBinary(near url: URL, fileManager: FileManager) -> URL? {
+        if isCurrentArchitectureMachO(url) { return url }
+
+        var packageRoots: [URL] = []
+        if url.lastPathComponent == "codex.js" || url.lastPathComponent == "codex" {
+            let parent = url.deletingLastPathComponent()
+            if parent.lastPathComponent == "bin" {
+                packageRoots.append(parent.deletingLastPathComponent())
+            }
+        }
+
+        for root in packageRoots {
+            let vendor = nativeCodexVendorPath(packageRoot: root)
+            if fileManager.isExecutableFile(atPath: vendor.path), isCurrentArchitectureMachO(vendor) {
+                return vendor
+            }
+        }
+        return nil
+    }
+
+    static func isCurrentArchitectureMachO(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url),
+              let data = try? handle.read(upToCount: 8),
+              data.count >= 8
+        else { return false }
+        try? handle.close()
+
+        let magic = data.prefix(4).withUnsafeBytes { $0.load(as: UInt32.self) }
+        if magic == 0xcafebabe || magic == 0xbebafeca || magic == 0xcafebabf || magic == 0xbfbafeca {
+            return true
+        }
+        guard magic == 0xfeedfacf || magic == 0xcffaedfe else { return false }
+        let cpuType = data.subdata(in: 4..<8).withUnsafeBytes { $0.load(as: UInt32.self) }
+        let hostCPU: UInt32
+        #if arch(arm64)
+        hostCPU = magic == 0xfeedfacf ? 0x0100000c : 0x0c000001
+        #else
+        hostCPU = magic == 0xfeedfacf ? 0x01000007 : 0x07000001
+        #endif
+        return cpuType == hostCPU
     }
 
     private func executable(named name: String, preferred: URL) -> URL? {
@@ -228,9 +360,10 @@ struct ProfileCatalog {
             })
         }
         var seen = Set<String>()
-        return candidates.first { candidate in
-            seen.insert(candidate.path).inserted && fileManager.isExecutableFile(atPath: candidate.path)
-        }
+        return candidates.compactMap { candidate -> URL? in
+            guard seen.insert(candidate.path).inserted else { return nil }
+            return Self.resolvedExecutable(at: candidate, name: name, fileManager: fileManager)
+        }.first
     }
 
     private func cursorIsPresent() -> Bool {
@@ -242,10 +375,21 @@ struct ProfileCatalog {
             || fileManager.fileExists(atPath: app.path)
     }
 
+    private func claudeIsPresent() -> Bool {
+        let claudeHome = environment["CLAUDE_CONFIG_DIR"].map(URL.init(fileURLWithPath:))
+            ?? homeDirectory.appendingPathComponent(".claude")
+        let support = homeDirectory.appendingPathComponent("Library/Application Support/Claude")
+        let app = URL(fileURLWithPath: "/Applications/Claude.app")
+        return fileManager.fileExists(atPath: claudeHome.path)
+            || fileManager.fileExists(atPath: support.path)
+            || fileManager.fileExists(atPath: app.path)
+            || executable(named: "claude", preferred: claudeHome.appendingPathComponent("bin/claude")) != nil
+    }
+
     private func defaultOrder(for profile: AgentProfile) -> Int {
         switch profile.id {
         case "cursor-default": 5_000
-        case "grok-default": 10_000
+        case "claude-default": 7_500
         case "codex-default": 20_000
         default: 30_000
         }

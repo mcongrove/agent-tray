@@ -7,15 +7,17 @@ enum NotchPosition: String, CaseIterable {
     var isHorizontal: Bool { self == .top || self == .bottom }
 }
 
-enum AgentKind: String, Codable, Sendable {
+enum AgentKind: String, Codable, CaseIterable, Sendable {
     case grok
     case cursor
+    case claude
     case codex
 
     var symbolName: String {
         switch self {
         case .grok: "sparkle"
         case .cursor: "cube"
+        case .claude: "c.circle"
         case .codex: "circle.hexagongrid"
         }
     }
@@ -102,11 +104,11 @@ struct AgentSnapshot: Codable, Equatable, Sendable {
         quotaWindows.first(where: { $0.id == "cursor-api" })?.usedPercent
     }
 
-    var codexWeeklyPercent: Int? {
+    var weeklyPercent: Int? {
         quotaWindows.first(where: { $0.durationMinutes == 10_080 })?.usedPercent
     }
 
-    var codexFiveHourPercent: Int? {
+    var fiveHourPercent: Int? {
         quotaWindows.first(where: { $0.durationMinutes == 300 })?.usedPercent
     }
 

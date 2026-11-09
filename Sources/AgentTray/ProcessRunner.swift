@@ -22,9 +22,26 @@ enum ProcessRunnerError: LocalizedError {
 struct JSONRPCExchange: Sendable {
     let line: String
     var waitForID: Int? = nil
+    var waitForRequestID: String? = nil
 }
 
 enum ProcessRunner {
+    static func launchEnvironment(_ environment: [String: String]? = nil) -> [String: String] {
+        var env = environment ?? ProcessInfo.processInfo.environment
+        let extras = [
+            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin").path,
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+        ]
+        var parts = (env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin").split(separator: ":").map(String.init)
+        var seen = Set(parts)
+        for extra in extras where seen.insert(extra).inserted {
+            parts.append(extra)
+        }
+        env["PATH"] = parts.joined(separator: ":")
+        return env
+    }
+
     static func runJSONRPC(
         executable: URL,
         arguments: [String],
@@ -62,7 +79,7 @@ enum ProcessRunner {
                 let process = Process()
                 process.executableURL = executable
                 process.arguments = arguments
-                if let environment { process.environment = environment }
+                process.environment = launchEnvironment(environment)
 
                 let outputPipe = Pipe()
                 let errorPipe = Pipe()
@@ -120,7 +137,7 @@ enum ProcessRunner {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
-        if let environment { process.environment = environment }
+        process.environment = launchEnvironment(environment)
 
         let outputPipe = Pipe()
         let errorPipe = Pipe()
@@ -151,18 +168,22 @@ enum ProcessRunner {
             } catch {
                 break
             }
-            guard let id = exchange.waitForID else { continue }
+            guard exchange.waitForID != nil || exchange.waitForRequestID != nil else { continue }
             var matched = false
             while Date() < deadline {
                 guard let line = reader.readLine(deadline: deadline) else { break }
                 collected.append(contentsOf: Data((line + "\n").utf8))
-                if jsonRPCID(in: line) == id {
+                if exchange.waitForID != nil, Self.jsonRPCID(in: line) == exchange.waitForID {
+                    matched = true
+                    break
+                }
+                if let requestID = exchange.waitForRequestID, Self.controlRequestID(in: line) == requestID {
                     matched = true
                     break
                 }
             }
             if !matched {
-                timedOut = true
+                timedOut = process.isRunning
                 break
             }
         }
@@ -200,6 +221,15 @@ enum ProcessRunner {
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
         return (object["id"] as? NSNumber)?.intValue
+    }
+
+    private static func controlRequestID(in line: String) -> String? {
+        guard let data = line.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["type"] as? String == "control_response",
+              let response = object["response"] as? [String: Any]
+        else { return nil }
+        return response["request_id"] as? String
     }
 }
 

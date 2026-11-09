@@ -11,7 +11,10 @@ let package = Package(
         .executableTarget(
             name: "AgentTray",
             path: "Sources/AgentTray",
-            resources: [.copy("Resources/bot.png")]
+            resources: [
+                .copy("Resources/bot.png"),
+                .copy("Resources/marks")
+            ]
         )
     ]
 )
